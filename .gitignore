@@ -1,1 +1,4 @@
-forthish
+_forthish
+.vscode
+build
+*.pdb

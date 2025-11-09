@@ -5,7 +5,7 @@ $misc = join-path $PSScriptRoot 'helpers/misc.ps1'
 . $misc
 
 $url_forthish  = 'https://github.com/guitarvydas/forthish.git'
-$path_forthish = join-path $path_root 'forthish'
+$path_forthish = join-path $path_root '_forthish'
 
 clone-gitrepo $path_forthish $url_forthish
 
