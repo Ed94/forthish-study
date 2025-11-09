@@ -138,7 +138,6 @@ $stage3_time = Measure-Command { & $compiler $ir_to_obj_args }
 write-host "Object file generation took $($stage3_time.TotalMilliseconds)ms"
 write-host
 }
-
 if ($true) {
 	# write-host "Linking with lld-link"
 	$linker_args = @()
@@ -161,8 +160,6 @@ if ($true) {
 	write-host "Linking took $($linking_time.TotalMilliseconds)ms"
 	write-host
 }
-
-# --- Optional Debug Info Dump (unchanged) ---
 if ($false) {
 	write-host "Dumping Debug Info"
 	$rbin_out  = '--out:'

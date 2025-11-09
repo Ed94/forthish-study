@@ -11,13 +11,3 @@ target:
   label: "simple.c"
   enabled: 1
 }
-breakpoint:
-{
-  source_location: "code/C/simple.c:184:1"
-  hit_count: 1
-}
-breakpoint:
-{
-  source_location: "code/C/simple.c:168:1"
-  hit_count: 1
-}

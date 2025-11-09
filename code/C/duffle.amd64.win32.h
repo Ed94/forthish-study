@@ -40,7 +40,7 @@ Standard: c23
 #define expect(x,y)   __builtin_expect(x, y)                  // so compiler knows the common path
 #define I_            internal inline
 #define IA_           I_       __attribute__((always_inline)) // inline always
-#define N_            internal __attribute__((noinline))      // inline never [used in thread api]
+#define N_            internal __attribute__((noinline))      // inline never
 #define RO_           __attribute__((section(".rodata")))     // Read only data allocation
 #define r             restrict                                // pointers are either restricted or volatile and nothing else 
 #define v             volatile                                // pointers are either restricted or volatile and nothing else
@@ -67,6 +67,7 @@ Standard: c23
 #define ret_(proc)                    tmpl(Ret,proc) proc
 
 // Generally unused, allows force inlining of procedures at the discretion of the call-site.
+#if 0
 #define IC_(name) inline_ ## name
 #define I_proc(name, params, args) \
   IA_ void IC_(name) params; \
@@ -74,7 +75,8 @@ Standard: c23
   IA_ void IC_(name) params
 #define I_proc_r(type_ret, name, params, args) \
   IA_ type_ret IC_(name) params; \
-  I_  type_ret     name  params { return IC_(name)args; } \
+  I_  type_ret     name  params { return IC_(name)args; }
+#endif
 
 typedef __UINT8_TYPE__  U1; typedef __UINT16_TYPE__ U2; typedef __UINT32_TYPE__ U4; typedef __UINT64_TYPE__ U8; 
 typedef __INT8_TYPE__   S1; typedef __INT16_TYPE__  S2; typedef __INT32_TYPE__  S4; typedef __INT64_TYPE__  S8;
@@ -178,20 +180,24 @@ IA_ U8 mem_copy_overlapping(U8 dest, U8 src,   U8 len) { return (U8)(__builtin_m
 IA_ U8 mem_fill            (U8 dest, U8 value, U8 len) { return (U8)(__builtin_memset ((void*)dest, (int)        value, len)); }
 IA_ B4 mem_zero            (U8 dest,           U8 len) { if(dest == 0){return false;} mem_fill(dest, 0, len); return true; }
 
-typedef Struct_(Slice)     { U8 ptr, len; };
-#define Slice_(type)       Struct_(tmpl(Slice,type)) { type* ptr; U8 len; }
+typedef Struct_(Slice) { U8 ptr, len; }; // Untyped Slice
+IA_ Slice slice_ut_(U8 ptr, U8 len) { return (Slice){ptr, len}; }
+
+#define Slice_(type)        Struct_(tmpl(Slice,type)) { type* ptr; U8 len; }
 typedef Slice_(B1);
 #define slice_assert(s)    do { assert((s).ptr != 0); assert((s).len > 0); } while(0)
 #define slice_end(slice)   ((slice).ptr + (slice).len)
-#define S_slice(s)         ((s).len * S_(u8_r((s).ptr)[0]))
-#define slice_raw(ptr,len) ((Slice){u8_(ptr),   u8_(len)  })
-#define slice_to_raw(s)    ((Slice){u8_(s.ptr), S_slice(s)})
+#define S_slice(s)         ((s).len * S_((s).ptr[0]))
+
+#define slice_ut(ptr,len)  slice_ut_(u8_(ptr), u8_(len))
+#define slice_ut_arr(a)    slice_ut_(u8_(a),   S_(a))
+#define slice_to_ut(s)     slice_ut_(u8_((s).ptr), S_slice(s))
 
 #define slice_iter(container, iter)     (T_((container).ptr) iter = (container).ptr; iter != slice_end(container); ++ iter)
 #define slice_arg_from_array(type, ...) & (tmpl(Slice,type)) { .ptr = array_decl(type,__VA_ARGS__), .len = array_len( array_decl(type,__VA_ARGS__)) }
 
 IA_ void slice_zero_(Slice s) { slice_assert(s); mem_zero(s.ptr, s.len); }
-#define  slice_zero(s)        slice_zero_(slice_to_raw(s))
+#define  slice_zero(s)        slice_zero_(slice_to_ut(s))
 
 IA_ void slice_copy_(Slice dest, Slice src) {
 	assert(dest.len >= src.len);
@@ -201,7 +207,7 @@ IA_ void slice_copy_(Slice dest, Slice src) {
 }
 #define slice_copy(dest, src) do {  \
 	static_assert(T_same(dest, src)); \
-	slice_copy_(slice_to_raw(dest), slice_to_raw(src)); \
+	slice_copy_(slice_to_ut(dest), slice_to_ut(src)); \
 } while(0)
 #pragma endregion Memory
 
@@ -223,20 +229,21 @@ typedef Struct_(V2_U1){ U1 x; U1 y;};
 #define index_iter(type, iter, begin, op, end) (type iter = begin; iter op end; (begin < end ? ++ iter : -- iter))
 #define range_iter(iter,op,range)              (T_((range).p0) iter = (range).p0; iter op (range).p1; ((range).p0 < (range).p1 ? ++ iter : -- iter))
 
-#define defer(expr)      for(U4 __i=(1,(begin));__i!=0;(--__i,(expr))
-#define scope(begin,end) for(U4 __i=(1,(begin));__i!=0;(--__i,(end ))
+#define defer(expr)          for(U4         once=(1,(begin));once!=0;--once,(expr))
+#define scope(begin,end)     for(U4         once=(1,(begin));once!=0;--once,(end ))
+#define defer_rewind(cursor) for(T_(cursor) sp=cursor,once=1;once!=0;--once,cursor=sp) // Used with arenas/stacks
 #pragma endregion Control Flow & Iteration
 
 #pragma region FArena
-typedef Opt_(farena) { U8 alignment, type_width; };
-typedef Struct_(FArena)      { U8 start, capacity, used; };
+typedef Opt_(farena)    { U8 alignment, type_width; };
+typedef Struct_(FArena) { U8 start, capacity, used; };
 IA_ void farena_init(FArena*r arena, Slice mem) {  assert(arena != nullptr);
 	arena->start    = mem.ptr;
 	arena->capacity = mem.len;
 	arena->used     = 0;
 }
 IA_ FArena farena_make(Slice mem) { FArena a; farena_init(& a, mem); return a; }
-I_ Slice  farena_push(FArena*r arena, U8 amount, Opt_farena o) {
+I_ Slice farena_push(FArena*r arena, U8 amount, Opt_farena o) {
 	if (amount == 0) { return (Slice){}; }
 	U8 desired   = amount * (o.type_width == 0 ? 1 : o.type_width);
 	U8 to_commit = align_pow2(desired, o.alignment ?  o.alignment : MEM_ALIGNMENT_DEFAULT);
@@ -256,12 +263,28 @@ IA_ U8 farena_save(FArena arena) { return arena.used; }
 #define farena_push_array(arena, type, amount, ...) (tmpl(Slice,type)){ C_(type*, farena_push((arena), (amount), opt_(farena, .type_width=S_(type), __VA_ARGS__)).ptr), (amount) }
 #pragma endregion FArena
 
+#pragma region FStack
+#define FStack_(name, type, width) Struct_(name) { U8 top; type arr[width]; }
+
+IA_ Slice fstack_push(Slice mem, U8* top, U8 amount, Opt_farena o) { 
+	FArena a = { mem.ptr, mem.len, top[0] }; Slice s = farena_push(& a, amount, o); 
+	top[0] = a.used; return s;
+};
+
+// This is here more for annotation than anything else.
+#define fstack_save(stack)       stack.top
+#define fstack_rewind(stack, sp) do{stack.top = sp;}while(0)
+#define fstack_reset(stack)      do{stack.top = 0; }while(0)
+
+#define fstack_slice(stack) slice_ut_arr((stack).arr)
+#define fstack_push_(stk, amount, ...) fstack_push(fstack_slice(stk), & (stk).top, (amount), opt_(farena, __VA_ARGS__))
+#define fstack_push_array(stk, type, amount, ...) \
+(tmpl(Slice,type)){ C_(type*, fstack_push(fstack_slice(stk), & (stk).top, (amount), opt_(farena, .type_width=S_(type), __VA_ARGS__)).ptr), (amount) }
+#pragma endregion FStack
+
 #pragma region Text
 typedef unsigned char UTF8;
-typedef Struct_(Str8) { 
-	UTF8* ptr; 
-	U8 len; 
-}; 
+typedef Struct_(Str8) { UTF8* ptr; U8 len; }; 
 typedef Str8 Slice_UTF8;
 typedef Slice_(Str8);
 #define str8(literal) ((Str8){(UTF8*)literal, S_(literal) - 1})
@@ -306,15 +329,17 @@ typedef Array_(Str8, 2);
 typedef Slice_(Str8_A2);
 typedef KTL_Slot_(Str8);
 typedef KTL_(Str8);
-N_ void ktl_populate_slice_a2_str8(KTL_Str8* kt, Slice_Str8_A2 values) {
+IA_ void ktl_populate_slice_a2_str8(KTL_Str8* kt, Slice_Str8_A2 values) {
 	assert(kt != null); slice_assert(* kt);
 	if (values.len == 0) return;
 	assert(kt->len == values.len);
 	for index_iter(U4, id, 0, <, values.len) { 
+		hash64_fnv1a(& kt->ptr[id].key, slice_to_ut(values.ptr[id][0]), 0);
 		mem_copy(u8_(& kt->ptr[id].value), u8_(& values.ptr[id][1]), S_(Str8));
-		hash64_fnv1a( & kt->ptr[id].key, slice_to_raw(values.ptr[id][0]), 0);
 	}
 }
+#define ktl_str8_key(str)      hash64_fnv1a_ret(slice_to_ut(str8(str)), 0)
+#define ktl_str8_from_arr(arr) (KTL_Str8){arr, array_len(tbl_arr)}
 #pragma endregion KTL
 
 #pragma region Serialization
@@ -332,10 +357,9 @@ RO_ global U8 integer_symbol_reverse[128] = {
 
 IA_ B4   char_is_upper  (UTF8 c) { return('A' <= c && c <= 'Z'); }
 IA_ UTF8 char_to_lower  (UTF8 c) { if (char_is_upper(c)) { c += ('a' - 'A'); } return(c); }
-IA_ B4   char_is_digit(UTF8 c, U4 base) 
-{
-  B4 result = 0; if(0 < base && base <= 16) {
-    if(integer_symbol_reverse[c] < base) result = 1;
+IA_ B4   char_is_digit(UTF8 c, U4 base) {
+  B4 result = 0; if (0 < base && base <= 16) {
+    if (integer_symbol_reverse[c] < base) result = 1;
   }
   return result;
 }
@@ -348,7 +372,8 @@ typedef Struct_(Info_str8_from_u4) {
 	U4   needed_leading_zeros;
 	U4   size_required;
 };
-I_ Info_str8_from_u4 str8_from_u4_info(U4 num, U4 radix, U4 min_digits, U4 digit_group_separator) {
+I_ Info_str8_from_u4 str8_from_u4_info(U4 num, U4 radix, U4 min_digits, U4 digit_group_separator)
+{
 	Info_str8_from_u4 info;
 	LP_ Str8 tbl_prefix[] = { str8("0x"), str8("0o"), str8("0b") };
 	switch (radix) {
@@ -457,7 +482,7 @@ I_ Str8 str8_fmt_ktl_buf(Slice buffer, KTL_Str8 table, Str8 fmt_template)
 			}
 			if (fmt_overflow) continue;
 			// Hashing the potential token and cross checking it with our token table
-			U8 key = hash64_fnv1a_ret(slice_raw(u8_(potential_token_cursor), potential_token_len), 0);
+			U8 key = hash64_fnv1a_ret(slice_ut(u8_(potential_token_cursor), potential_token_len), 0);
 			Str8*r value = nullptr; for slice_iter(table, token) {
 				// We do a linear iteration instead of a hash table lookup because the user should be never substiuting with more than 100 unqiue tokens..
 				if (token->key == key) { value = & token->value; break; }
@@ -489,6 +514,7 @@ I_ Str8 str8_fmt_ktl_buf(Slice buffer, KTL_Str8 table, Str8 fmt_template)
 
 typedef Struct_(Str8Gen) { UTF8* ptr; U8 cap, len; };
 IA_ Slice str8gen_buf(Str8Gen*r gen) { return (Slice){u8_(gen->ptr) + gen->len, gen->cap - gen->len}; }
+
 IA_ void str8gen_append_str8(Str8Gen*r gen, Str8 str) { assert(gen != nullptr);
 	Str8 mem = farena_push_array(C_(FArena*, gen), UTF8, str.len);
 	slice_copy(mem, str);
@@ -497,4 +523,5 @@ IA_ void str8gen_append_fmt(Str8Gen*r gen, Str8 fmt, KTL_Str8 tbl) {
 	Str8 result = str8_fmt_ktl_buf(str8gen_buf(gen), tbl, fmt);
 	gen->len += result.len;
 }
+#define str8gen_append_str8_(gen, s) str8gen_append_str8(gen, str8(s))
 #pragma endregion Serialization

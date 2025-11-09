@@ -3,11 +3,6 @@ Simple Forth-like: C (ideosyncratic, non-portable), clang, Win32(Windows 11)
 */
 #include "duffle.amd64.win32.h"
 
-typedef Struct_(Stack) { U8 ptr, len, id; };
-#define FStack_(name, type, width) Struct_(name) { type arr[width]; U8 top; }
-
-typedef void WordX();
-
 typedef Enum_(U8, Word_Tag) {
 	Word_bye,
 	Word_dot,
@@ -41,55 +36,54 @@ Str8 str8_word_tag(Word_Tag tag) {
 	};
 	return tbl[tag];
 }
-typedef Struct_(Word) { Word_Tag tag; 
-	union {
-		Str8   str;
-		UTF8   sym;
-		U8     num;
-	};
-};
+typedef Struct_(Word) { Word_Tag tag; union {
+	Str8   str;
+	UTF8   sym;
+	U8     num;
+};};
 
-typedef FStack_(Stack_Word, Word, mega(1) / S_(Word));
+typedef Struct_(Stack) { U8 ptr, len, id; };
+
+typedef FStack_(StackArena_K128, U1,   kilo(128));
+typedef FStack_(StackArena_M1,   U1,   mega(1));
+typedef FStack_(Stack_Word,      Word, mega(1) / S_(Word));
+
 typedef Struct_(ProcessMemory) {
-	FArena     word_store; U1 scratch_word_store[mega(1)];
-	Stack_Word stack;
-	U8         dictionary[Word_DictionaryNum];
-	U1         buff[kilo(1)];
-	U8         buff_cursor;
-	MS_Handle  std_out;
-	MS_Handle  std_in;
+	StackArena_M1 word_strs;
+	Stack_Word    stack;
+	U8            dictionary[Word_DictionaryNum];
+	U1            buff[kilo(1)];
+	U8            buff_cursor;
+	MS_Handle     std_out;
+	MS_Handle     std_in;
 };
 typedef Struct_(ThreadMemory) {
-	FArena scratch; U1 scratch_64k[kilo(128)];
+	StackArena_K128 scratch;
 };
 global     ProcessMemory pmem;
 global LT_ ThreadMemory  thread;
 
-IA_ Slice scratch_64k()        { return (Slice){u8_(thread.scratch_64k), S_(thread.scratch_64k)}; }
-IA_ Slice scratch_push(U8 len) { return farena_push_(& thread.scratch, len); }
+IA_ Slice scratch_64k()        { return (Slice){u8_(thread.scratch.arr), S_(thread.scratch.arr)}; }
+IA_ Slice scratch_push(U8 len) { return fstack_push_(thread.scratch, len); }
 
-#define ktl_str8_make_(values) ktl_str8_make((Slice_Str8_A2){values, array_len(values)})
-N_ KTL_Str8 ktl_str8_make(Slice_Str8_A2 values) {
-	KTL_Str8 tbl = farena_push_array(& thread.scratch, KTL_Slot_Str8, 1); 
-	ktl_populate_slice_a2_str8(& tbl, values);
-	return tbl;
-}
-
-#define str8_from_u4(num, ...) str8_from_u4_opt(num, opt_(str8_from_u4, __VA_ARGS__))
 typedef Opt_(str8_from_u4) { U4 radix, min_digits, digit_group_separator; }; 
-IA_ Str8 str8_from_u4_opt(U4 num, Opt_str8_from_u4 o) { 
-	if (o.radix == 0) {o.radix = 10;} 
+IA_ Str8 str8_from_u4_opt(U4 num, Opt_str8_from_u4 o) { if (o.radix == 0) {o.radix = 10;} 
 	Info_str8_from_u4 info = str8_from_u4_info(num, o.radix, o.min_digits, o.digit_group_separator);
 	return str8_from_u4_buf(scratch_push(128), num, o.radix, o.min_digits, o.digit_group_separator, info);
 }
-N_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(64)), tbl, fmt); };
+#define str8_from_u4(num, ...) str8_from_u4_opt(num, opt_(str8_from_u4, __VA_ARGS__))
+
+#define str8_fmt_(s, tbl_arr)                   str8_fmt(str8(s), ktl_str8_from_arr(tbl_arr))
+#define print_fmt_(s, tbl_arr)            print(str8_fmt(str8(s), ktl_str8_from_arr(tbl_arr)))
+#define print_(s)                         print(str8(s))
+IA_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(64)), tbl, fmt); };
 IA_ void print(Str8 s)                    { U4 written; ms_write_console(pmem.std_out, s.ptr, u4_(s.len), & written, 0); }
 
 IA_ Word*r stack_get_r(U8 id) { return & pmem.stack.arr[id]; };
-IA_ Word   stack_get(U8 id)   { return pmem.stack.arr[id]; };
+IA_ Word   stack_get(U8 id)   { return   pmem.stack.arr[id]; };
 IA_ Word   stack_pop()        { 
 	Word w = pmem.stack.arr[pmem.stack.top]; 
-	if (w.tag == Word_String) pmem.word_store.used -= w.str.len;
+	if (w.tag == Word_String){ pmem.word_strs.top -= w.str.len; }
 	pmem.stack.arr[pmem.stack.top] = (Word){0}; 
 	pmem.stack.top = clamp_bot(0, s8_(-- pmem.stack.top));
 	return w; 
@@ -98,36 +92,36 @@ IA_ Word stack_push(Word w) { return pmem.stack.arr[pmem.stack.top] = w; ++ pmem
 
 IA_ void stack_push_char(UTF8 sym) { stack_push((Word){Word_Char,   .sym = sym}); }
 IA_ void stack_push_str8(Str8 str) { 
-	Str8 stored = farena_push_array(& pmem.word_store, UTF8, str.len);
+	Str8 stored = fstack_push_array(pmem.word_strs, UTF8, str.len);
 	slice_copy(stored, str);
 	stack_push((Word){Word_String, .str = stored}); 
 }
-Str8 serialize_word(Word word){ switch(word.tag) {
+IA_ Str8 serialize_word(Word word){ switch(word.tag) {
 case Word_String: return word.str;
 case Word_Number: return str8_from_u4(u4_(word.num));
 default: return (Str8){};
 }}
 I_ Str8 serialize_stack(){
 	Str8Gen serial = { .ptr = C_(UTF8*, scratch_push(kilo(64)).ptr), .cap = kilo(64), };
-	str8gen_append_str8(& serial, str8("[ ")); 
+	str8gen_append_str8_(& serial, "[ "); 
 	for (U4 id = pmem.stack.top; s4_(pmem.stack.top) >= 0; -- id) {
 		// \t<word>,\n
-		str8gen_append_str8(& serial, str8("\t"));
-		str8gen_append_str8(& serial, serialize_word(stack_get(id))); 
-		str8gen_append_str8(& serial, str8(",\n"));
+		str8gen_append_str8_(& serial, "\t");
+		str8gen_append_str8 (& serial, serialize_word(stack_get(id))); 
+		str8gen_append_str8_(& serial, ",\n");
 	}
-	str8gen_append_str8(& serial, str8(" ]"));
+	str8gen_append_str8_(& serial, " ]");
 	return (Str8){serial.ptr, serial.len};
 }
 
 IA_ void xbye()  { process_exit(0); }
 IA_ void xdot()  { Str8 str = str8_from_u4(u4_(stack_pop().num)); print(str); }
-IA_ void xdots() { U8 sp = farena_save(thread.scratch); print(serialize_stack()); farena_rewind(& thread.scratch, sp); }
+IA_ void xdots() { defer_rewind(thread.scratch.top) { print(serialize_stack()); } }
 IA_ void xadd()  { stack_push((Word){Word_Number, .num = stack_pop().num + stack_pop().num}); }
 IA_ void xswap() { U8 x = stack_get(-1).num; stack_get_r(-1)->num = stack_get(-2).num; stack_get_r(-2)->num = x; }
 IA_ void xsub()  { xswap(); stack_push((Word){Word_Number, .num = stack_pop().num - stack_pop().num}); }
 
-void xword() {
+I_ void xword() {
 	Word  want      = stack_pop();
 	U8    found     = pmem.buff_cursor;
 	U8    found_len = 0;
@@ -149,14 +143,12 @@ void xword() {
 		}
 	stack_push_str8((Str8){C_(UTF8*, pmem.buff + found), found_len});
 }
-
-void xinterpret() {
+I_ void xinterpret() {
 	Word word = stack_pop();
 	if (word.tag > Word_Num) {
 		return;
 	}
-	if (word.tag < Word_DictionaryNum) switch(word.tag) {
-	// vtable lookup
+	if (word.tag < Word_DictionaryNum) switch(word.tag) { // lookup table
 	case Word_bye:   xbye();  return;
 	case Word_dot:   xdot();  return;
 	case Word_dot_s: xdots(); return;
@@ -165,18 +157,13 @@ void xinterpret() {
 	case Word_sub:   xsub();  return;
 	}
 	else {
-		Str8 lit_word = str8("word");
-		Str8_A2 tbl_arr[] = { 
-			{lit_word, serialize_word(word)}, 
-		}; 
-		KTL_Str8 tbl = ktl_str8_make_(tbl_arr);
-		print(str8_fmt(str8("<word>?\n"), tbl));
+		KTL_Slot_Str8 tbl_arr[] = { {ktl_str8_key("word"), serialize_word(word)}, };
+		print_fmt_("<word>?\n", tbl_arr);
 	}
 }
-
-void ok(){ while(1) {
-	farena_reset(& thread.scratch);
-	print(str8("OK "));
+I_ void ok(){ while(1) {
+	fstack_reset(thread.scratch);
+	print_("OK ");
 	U4 len, read_ok = ms_read_console(pmem.std_in, pmem.buff, S_(pmem.buff), & len, null);
 	if (read_ok == false || len == 0) { continue; }
 	pmem.buff_cursor = 0;
@@ -193,12 +180,20 @@ int main(void)
 	/*prep*/ {
 		pmem.std_out = ms_get_std_handle(MS_STD_OUTPUT);
 		pmem.std_in  = ms_get_std_handle(MS_STD_INPUT);
-		farena_init(& pmem.word_store, slice_raw(pmem.scratch_word_store, array_len(pmem.scratch_word_store)));
-		farena_init(& thread.scratch,  slice_raw(thread.scratch_64k,      array_len(thread.scratch_64k)));
 		for (U8 id = Word_bye; id < Word_DictionaryNum; ++ id) {
-			hash64_fnv1a(& pmem.dictionary[id], slice_to_raw(str8_word_tag(id)), 0);
+			hash64_fnv1a(& pmem.dictionary[id], slice_to_ut(str8_word_tag(id)), 0);
 		}
 	}
 	ok();
 	return 0;
 }
+
+// Artifacts I don't want to delete..
+#if 0 /*Prefer to just hash on-site*/
+#define      ktl_str8_make_(values) ktl_str8_make((Slice_Str8_A2){values, array_len(values)})
+IA_ KTL_Str8 ktl_str8_make(Slice_Str8_A2 values) {
+	KTL_Str8 tbl = fstack_push_array(thread.scratch, KTL_Slot_Str8, 1); 
+	ktl_populate_slice_a2_str8(& tbl, values);
+	return tbl;
+}
+#endif
