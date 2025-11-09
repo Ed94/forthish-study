@@ -89,8 +89,9 @@ $compiler_args = @()
 # $compiler_args += $flag_emit_llvm
 $compiler_args += ($flag_define + 'BUILD_DEBUG=1')
 $compiler_args += $flag_debug
+# $compiler_args += $flag_debug_codeview
 $compiler_args += $flag_wall
-$compiler_args += $flag_charset_utf8
+# $compiler_args += $flag_charset_utf8
 $compiler_args += $flag_c23
 $compiler_args += $flag_no_optimization
 # $compiler_args += $flag_no_builtin_includes
@@ -139,7 +140,7 @@ write-host
 }
 
 if ($true) {
-	write-host "Linking with lld-link"
+	# write-host "Linking with lld-link"
 	$linker_args = @()
 	$linker_args += $flag_nologo
 	$linker_args += $flag_link_win_machine_64

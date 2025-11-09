@@ -7,6 +7,7 @@ Standard: c23
 */
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-variable"
+#pragma clang diagnostic ignored "-Wswitch"
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "Kernel32.lib")
@@ -56,9 +57,9 @@ Standard: c23
 #define Array_sym(type,len)           type ## _ ## A ## len
 #define Array_expand(type,len)        type Array_sym(type, len)[len];
 #define Array_(type,len)              Array_expand(type,len)
-#define Enum_(underlying_type,symbol) underlying_type symbol; enum   symbol
-#define Struct_(symbol)               struct symbol   symbol; struct symbol
-#define Union_(symbol)                union  symbol   symbol; union  symbol
+#define Enum_(underlying_type,symbol) enum   symbol: underlying_type symbol; enum symbol: underlying_type
+#define Struct_(symbol)               struct symbol   symbol;                struct symbol
+#define Union_(symbol)                union  symbol   symbol;                union  symbol
 
 #define Opt_(proc)                    Struct_(tmpl(Opt,proc))
 #define opt_(symbol, ...)             (tmpl(Opt,symbol)){__VA_ARGS__}
@@ -152,7 +153,7 @@ IA_ U8 atm_swap_u8(U8*r addr, U8 value){asm volatile("lock xchgq %0,%1":"=r"(val
 WinAPI void process_exit(U4 status) asm("exit");
 #define debug_trap() __debugbreak()
 #if BUILD_DEBUG
-IA_ void assert(U8 cond) { if(cond == false){return;} else{debug_trap(); process_exit(1);} }
+IA_ void assert(U8 cond) { if(cond){return;} else{debug_trap(); process_exit(1);} }
 #else
 #define assert(cond)
 #endif
@@ -257,7 +258,10 @@ IA_ U8 farena_save(FArena arena) { return arena.used; }
 
 #pragma region Text
 typedef unsigned char UTF8;
-typedef Struct_(Str8) { UTF8* ptr; U8 len; }; 
+typedef Struct_(Str8) { 
+	UTF8* ptr; 
+	U8 len; 
+}; 
 typedef Str8 Slice_UTF8;
 typedef Slice_(Str8);
 #define str8(literal) ((Str8){(UTF8*)literal, S_(literal) - 1})
@@ -302,7 +306,7 @@ typedef Array_(Str8, 2);
 typedef Slice_(Str8_A2);
 typedef KTL_Slot_(Str8);
 typedef KTL_(Str8);
-IA_ void ktl_populate_slice_a2_str8(KTL_Str8* kt, Slice_Str8_A2 values) {
+N_ void ktl_populate_slice_a2_str8(KTL_Str8* kt, Slice_Str8_A2 values) {
 	assert(kt != null); slice_assert(* kt);
 	if (values.len == 0) return;
 	assert(kt->len == values.len);

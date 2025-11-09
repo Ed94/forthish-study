@@ -41,11 +41,13 @@ Str8 str8_word_tag(Word_Tag tag) {
 	};
 	return tbl[tag];
 }
-typedef Struct_(Word) { Word_Tag tag; union {
-	UTF8   sym;
-	U8     num;
-	Str8   str;
-};};
+typedef Struct_(Word) { Word_Tag tag; 
+	union {
+		Str8   str;
+		UTF8   sym;
+		U8     num;
+	};
+};
 
 typedef FStack_(Stack_Word, Word, mega(1) / S_(Word));
 typedef Struct_(ProcessMemory) {
@@ -67,7 +69,7 @@ IA_ Slice scratch_64k()        { return (Slice){u8_(thread.scratch_64k), S_(thre
 IA_ Slice scratch_push(U8 len) { return farena_push_(& thread.scratch, len); }
 
 #define ktl_str8_make_(values) ktl_str8_make((Slice_Str8_A2){values, array_len(values)})
-IA_ KTL_Str8 ktl_str8_make(Slice_Str8_A2 values) {
+N_ KTL_Str8 ktl_str8_make(Slice_Str8_A2 values) {
 	KTL_Str8 tbl = farena_push_array(& thread.scratch, KTL_Slot_Str8, 1); 
 	ktl_populate_slice_a2_str8(& tbl, values);
 	return tbl;
@@ -80,16 +82,26 @@ IA_ Str8 str8_from_u4_opt(U4 num, Opt_str8_from_u4 o) {
 	Info_str8_from_u4 info = str8_from_u4_info(num, o.radix, o.min_digits, o.digit_group_separator);
 	return str8_from_u4_buf(scratch_push(128), num, o.radix, o.min_digits, o.digit_group_separator, info);
 }
-IA_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(64)), tbl, fmt); };
+N_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(64)), tbl, fmt); };
 IA_ void print(Str8 s)                    { U4 written; ms_write_console(pmem.std_out, s.ptr, u4_(s.len), & written, 0); }
 
 IA_ Word*r stack_get_r(U8 id) { return & pmem.stack.arr[id]; };
 IA_ Word   stack_get(U8 id)   { return pmem.stack.arr[id]; };
-IA_ Word   stack_pop()        { return pmem.stack.arr[pmem.stack.top]; }
-IA_ Word   stack_push(Word w) { ++ pmem.stack.top; return pmem.stack.arr[pmem.stack.top] = w; }
+IA_ Word   stack_pop()        { 
+	Word w = pmem.stack.arr[pmem.stack.top]; 
+	if (w.tag == Word_String) pmem.word_store.used -= w.str.len;
+	pmem.stack.arr[pmem.stack.top] = (Word){0}; 
+	pmem.stack.top = clamp_bot(0, s8_(-- pmem.stack.top));
+	return w; 
+}
+IA_ Word stack_push(Word w) { return pmem.stack.arr[pmem.stack.top] = w; ++ pmem.stack.top; }
 
 IA_ void stack_push_char(UTF8 sym) { stack_push((Word){Word_Char,   .sym = sym}); }
-IA_ void stack_push_str8(Str8 str) { stack_push((Word){Word_String, .str = farena_push_array(& pmem.word_store, UTF8, str.len)}); }
+IA_ void stack_push_str8(Str8 str) { 
+	Str8 stored = farena_push_array(& pmem.word_store, UTF8, str.len);
+	slice_copy(stored, str);
+	stack_push((Word){Word_String, .str = stored}); 
+}
 Str8 serialize_word(Word word){ switch(word.tag) {
 case Word_String: return word.str;
 case Word_Number: return str8_from_u4(u4_(word.num));
@@ -116,26 +128,26 @@ IA_ void xswap() { U8 x = stack_get(-1).num; stack_get_r(-1)->num = stack_get(-2
 IA_ void xsub()  { xswap(); stack_push((Word){Word_Number, .num = stack_pop().num - stack_pop().num}); }
 
 void xword() {
-	Str8  want      = stack_pop().str;
+	Word  want      = stack_pop();
 	U8    found     = pmem.buff_cursor;
 	U8    found_len = 0;
 	while (pmem.buff_cursor < S_(pmem.buff)) {
 		U8 x = pmem.buff[pmem.buff_cursor];
 		++ pmem.buff_cursor;
-		if (want.ptr[0] == x) {
+		if (want.sym == x || '\n' == x || '\r' == x) {
 			break;
 		}
 		else {
 			++ found_len;
 		}
 	}
-	U8 hash = hash64_fnv1a_ret((Slice){found, found_len}, 0);
+	U8 hash = hash64_fnv1a_ret((Slice){u8_(pmem.buff) + found, found_len}, 0);
 	for (U8 id = 0; id < Word_DictionaryNum; ++ id)
 		if (hash == pmem.dictionary[id]) {
 			stack_push((Word){id, {}});
 			return; // Identified a dictionary word, not a string
 		}
-	stack_push_str8((Str8){C_(UTF8*, found), found_len});
+	stack_push_str8((Str8){C_(UTF8*, pmem.buff + found), found_len});
 }
 
 void xinterpret() {
@@ -153,9 +165,12 @@ void xinterpret() {
 	case Word_sub:   xsub();  return;
 	}
 	else {
-		Str8_A2 tbl_arr[] = { {str8("word"), serialize_word(word)}, }; 
+		Str8 lit_word = str8("word");
+		Str8_A2 tbl_arr[] = { 
+			{lit_word, serialize_word(word)}, 
+		}; 
 		KTL_Str8 tbl = ktl_str8_make_(tbl_arr);
-		print(str8_fmt(str8("<word>?"), tbl));
+		print(str8_fmt(str8("<word>?\n"), tbl));
 	}
 }
 
@@ -163,13 +178,13 @@ void ok(){ while(1) {
 	farena_reset(& thread.scratch);
 	print(str8("OK "));
 	U4 len, read_ok = ms_read_console(pmem.std_in, pmem.buff, S_(pmem.buff), & len, null);
-	if    (read_ok == false || len == 0) { continue; }
-	while (len > 0 && (pmem.buff[len - 1] == '\n' || pmem.buff[len - 1] == '\r')) { -- len; }
+	if (read_ok == false || len == 0) { continue; }
 	pmem.buff_cursor = 0;
-	while (pmem.buff_cursor < S_(pmem.buff)) {
+	while (pmem.buff_cursor < len) {
 		stack_push_char(' ');
 		xword();
 		xinterpret();
+		while (len > 0 && (pmem.buff[pmem.buff_cursor - 1] == '\n' || pmem.buff[pmem.buff_cursor - 1] == '\r')) { -- len; }
 	}
 }}
 
@@ -184,7 +199,6 @@ int main(void)
 			hash64_fnv1a(& pmem.dictionary[id], slice_to_raw(str8_word_tag(id)), 0);
 		}
 	}
-	Str8 buff = {pmem.buff, S_(pmem.buff)};
 	ok();
 	return 0;
 }

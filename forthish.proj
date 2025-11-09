@@ -1,0 +1,23 @@
+// raddbg 0.9.23 project file
+
+recent_file: path: "code/C/simple.c"
+recent_file: path: "code/C/duffle.amd64.win32.h"
+recent_file: path: "D:/a/_work/1/s/src/vctools/crt/vcstartup/src/startup/exe_main.cpp"
+recent_file: path: "D:/a/_work/1/s/src/vctools/crt/vcstartup/src/startup/exe_common.inl"
+target:
+{
+  executable: "build/simple.exe"
+  working_directory: "build/"
+  label: "simple.c"
+  enabled: 1
+}
+breakpoint:
+{
+  source_location: "code/C/simple.c:184:1"
+  hit_count: 1
+}
+breakpoint:
+{
+  source_location: "code/C/simple.c:168:1"
+  hit_count: 1
+}
