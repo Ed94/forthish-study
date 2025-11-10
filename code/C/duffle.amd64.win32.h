@@ -153,7 +153,7 @@ IA_ U8 atm_swap_u8(U8*r addr, U8 value){asm volatile("lock xchgq %0,%1":"=r"(val
 
 #pragma region Debug
 WinAPI void process_exit(U4 status) asm("exit");
-#define debug_trap() __debugbreak()
+#define debug_trap() __builtin_debugtrap()
 #if BUILD_DEBUG
 IA_ void assert(U8 cond) { if(cond){return;} else{debug_trap(); process_exit(1);} }
 #else

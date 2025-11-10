@@ -132,23 +132,35 @@ IA_ void xbye()  { process_exit(0); }
 IA_ void xdot()  { print_fmt_("<num>\n", { {ktl_str8_key("num"), str8_from_u4(u4_(stack_pop().num))}, }); }
 IA_ void xdots() { defer_rewind(thread.scratch.top) { print(serialize_stack()); } }
 IA_ void xadd()  { stack_push((Word){Word_Integer, .num = stack_pop().num + stack_pop().num}); }
-IA_ void xswap() {  U8 x = stack_get(0).num; stack_get_r(0)->num = stack_get(1).num;  stack_get_r(1)->num = x; }
+IA_ void xswap() { U8 x = stack_get(0).num; stack_get_r(0)->num = stack_get(1).num;  stack_get_r(1)->num = x; }
 IA_ void xsub()  { xswap(); stack_push((Word){Word_Integer, .num = stack_pop().num - stack_pop().num}); }
 
-I_ void xword() {
+I_ void xword()
+{
 	Word  want      = stack_pop();
+try_again:
 	U8    found     = pmem.buff_cursor;
 	U8    found_len = 0;
 	while (pmem.buff_cursor < S_(pmem.buff)) {
 		U8 x = pmem.buff[pmem.buff_cursor];
 		++ pmem.buff_cursor;
-		if (want.sym == x || '\n' == x || '\r' == x) {
-			break;
+
+		switch(x) {
+		case '(': while(x != ')') { 
+				x = pmem.buff[pmem.buff_cursor];
+				++ pmem.buff_cursor;   
+				switch(x) { case '\r': case '\n': return; } // Nothing left to parse, just exit
+			};
+			++ pmem.buff_cursor;
+			goto try_again; // We've resolved a comment and still have input, attempt another scan for word
+
+		case '\r': case '\n': goto break_while;
 		}
-		else {
-			++ found_len;
-		}
+		if (want.sym == x) goto break_while;
+		// Resolving a word (no word end of line or end of word delimiter reached)
+		++ found_len;
 	}
+break_while:
 	U8 hash = hash64_fnv1a_ret((Slice){u8_(pmem.buff) + found, found_len}, 0);
 	for (U8 id = 0; id < Word_DictionaryNum; ++ id)
 		if (hash == pmem.dictionary[id]) {
