@@ -2,3 +2,4 @@ _forthish
 .vscode
 build
 *.pdb
+forthish.proj

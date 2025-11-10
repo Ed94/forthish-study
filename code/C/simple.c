@@ -11,12 +11,15 @@ typedef Enum_(U8, Word_Tag) {
 	Word_add,
 	Word_swap,
 	Word_sub,
+	Word_mult,
 	Word_word,
 	Word_interpret,
 	Word_DictionaryNum,
 	// Non-dictionary
 	Word_Char,
-	Word_Integer,
+	Word_U8,
+	Word_S8,
+	Word_F4,
 	Word_String,
 	Word_Num,
 };
@@ -29,12 +32,15 @@ Str8 str8_word_tag(Word_Tag tag) {
 		str8("+"),
 		str8("swap"),
 		str8("-"),
+		str8("*"),
 		str8("word"),
 		str8("interpret"),
 		str8("__Word_DicationaryNum__"),
-		str8("__Char__"),
-		str8("__Number__"),
-		str8("__String__"),
+		str8("Char"),
+		str8("U8"),
+		str8("S8"),
+		str8("F4"),
+		str8("Str8"),
 	};
 	return tbl[tag];
 }
@@ -111,7 +117,7 @@ IA_ void stack_push_str8(Str8 str) {
 }
 IA_ Str8 serialize_word(Word word){ switch(word.tag) {
 case Word_String: return word.str;
-case Word_Integer: return str8_from_u4(u4_(word.num));
+case Word_U8: return str8_from_u4(u4_(word.num));
 default: return (Str8){};
 }}
 I_ Str8 serialize_stack() {
@@ -119,7 +125,6 @@ I_ Str8 serialize_stack() {
 	str8gen_append_str8_(& serial, "[ "); 
 	if (pmem.stack.top > 0) {
 		for (U4 id = pmem.stack.top - 1; id > 0; -- id) {
-			// \t<word>,\n
 			str8gen_append_str8 (& serial, serialize_word(stack_get(id))); 
 			str8gen_append_str8_(& serial, ", ");
 		}
@@ -133,9 +138,10 @@ I_ Str8 serialize_stack() {
 IA_ void xbye()  { process_exit(0); }
 IA_ void xdot()  { print_fmt_("<num>\n", { {ktl_str8_key("num"), str8_from_u4(u4_(stack_pop().num))}, }); }
 IA_ void xdots() { defer_rewind(thread.scratch.top) { print(serialize_stack()); } }
-IA_ void xadd()  { stack_push((Word){Word_Integer, .num = stack_pop().num + stack_pop().num}); }
+IA_ void xadd()  { stack_push((Word){Word_U8, .num = stack_pop().num + stack_pop().num}); }
 IA_ void xswap() { U8 x = stack_get(0).num; stack_get_r(0)->num = stack_get(1).num;  stack_get_r(1)->num = x; }
-IA_ void xsub()  { xswap(); stack_push((Word){Word_Integer, .num = stack_pop().num - stack_pop().num}); }
+IA_ void xsub()  { xswap(); stack_push((Word){Word_U8, .num = stack_pop().num - stack_pop().num}); }
+IA_ void xmult() { stack_push((Word){Word_U8, .num = stack_pop().num * stack_pop().num}); }
 
 I_ void xword()
 {
@@ -147,30 +153,26 @@ try_again:
 		U8 x = pmem.buff[pmem.buff_cursor]; ++ pmem.buff_cursor;
 
 		switch(x) {
+		case '\r': case '\n': goto break_while; // Nothing left to parse, a word should resolve.
 		case '(': while(x != ')') { x = pmem.buff[pmem.buff_cursor]; pmem.buff_cursor += 1; };
 			++ pmem.buff_cursor;
 			switch(pmem.buff[pmem.buff_cursor]) { case '\r': case '\n': return; } // Nothing left to parse, just exit
 			goto try_again; // We've resolved a comment and still have input, attempt another scan for word
-
-		case '\r': case '\n': goto break_while;
 		}
 		if (want.sym == x) goto break_while;
-		// Resolving a word (no word end of line or end of word delimiter reached)
-		++ found_len;
+		++ found_len; // Stil resolving a word (no word end of line or end of word delimiter reached)
 	}
 break_while:
 	/*No word resolve, return*/ if (found_len == 0) return;
 	U8 hash = hash64_fnv1a_ret((Slice){u8_(pmem.buff) + found, found_len}, 0);
 	for (U8 id = 0; id < Word_DictionaryNum; ++ id)
 		if (hash == pmem.dictionary[id]) {
-			stack_push((Word){id, {}});
-			return; // Identified a dictionary word, not a string
+			stack_push((Word){id, {}}); return; // Identified a dictionary word, not a string
 		}
 	U1*r digit = pmem.buff + found;
 	Str8 str   = str8_comp(pmem.buff + found, found_len);
 	if (char_is_digit(digit[0], 10)) {
-		stack_push((Word){Word_Integer, .num = u8_from_str8(str, 10)});
-		return;
+		stack_push((Word){Word_U8, .num = u8_from_str8(str, 10)}); return;
 	}
 	// Unknown string
 	stack_push_str8(str);
@@ -184,8 +186,8 @@ I_ void xinterpret() {
 	switch(word.tag) { // lookup table
 	default: break;
 
-	case Word_Null:    return; // Do nothing.
-	case Word_Integer: return; // Do nothing we pushed it earlier.
+	case Word_Null: return; // Do nothing.
+	case Word_U8:   return; // Do nothing we pushed it earlier.
 
 	case Word_bye:   xbye();  return;
 	case Word_dot:   xdot();  return;
@@ -193,6 +195,7 @@ I_ void xinterpret() {
 	case Word_add:   xadd();  return;
 	case Word_swap:  xswap(); return;
 	case Word_sub:   xsub();  return;
+	case Word_mult:  xmult(); return;
 	}
 	// Unknown word
 	print_fmt_("<word>?\n", { {ktl_str8_key("word"), serialize_word(word)}, });
@@ -206,7 +209,7 @@ I_ void ok(){ while(1) {
 	while (pmem.buff_cursor < len) {
 		stack_push_char(' ');
 		xword(); xinterpret();
-		while(len > 0) switch(pmem.buff[pmem.buff_cursor - 1]) { default: len -= 1; break; case'\r': case'\n': len = 0; }
+		if (len > 0) switch(pmem.buff[pmem.buff_cursor - 1]) { case'\r': len -= 1; case'\n': len -= 1; }
 	}
 }}
 
