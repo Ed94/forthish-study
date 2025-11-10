@@ -12,6 +12,7 @@ typedef Enum_(U8, Word_Tag) {
 	Word_swap,
 	Word_sub,
 	Word_mult,
+	Word_div,
 	Word_word,
 	Word_interpret,
 	Word_DictionaryNum,
@@ -33,6 +34,7 @@ Str8 str8_word_tag(Word_Tag tag) {
 		str8("swap"),
 		str8("-"),
 		str8("*"),
+		str8("/"),
 		str8("word"),
 		str8("interpret"),
 		str8("__Word_DicationaryNum__"),
@@ -142,6 +144,7 @@ IA_ void xadd()  { stack_push((Word){Word_U8, .num = stack_pop().num + stack_pop
 IA_ void xswap() { U8 x = stack_get(0).num; stack_get_r(0)->num = stack_get(1).num;  stack_get_r(1)->num = x; }
 IA_ void xsub()  { xswap(); stack_push((Word){Word_U8, .num = stack_pop().num - stack_pop().num}); }
 IA_ void xmult() { stack_push((Word){Word_U8, .num = stack_pop().num * stack_pop().num}); }
+IA_ void xdiv()  { stack_push((Word){Word_U8, .num = stack_pop().num / stack_pop().num}); }
 
 I_ void xword()
 {
@@ -156,7 +159,7 @@ try_again:
 		case '\r': case '\n': goto break_while; // Nothing left to parse, a word should resolve.
 		case '(': while(x != ')') { x = pmem.buff[pmem.buff_cursor]; pmem.buff_cursor += 1; };
 			++ pmem.buff_cursor;
-			switch(pmem.buff[pmem.buff_cursor]) { case '\r': case '\n': return; } // Nothing left to parse, just exit
+			switch(pmem.buff[pmem.buff_cursor]) { case '\r': case '\n': return; } // Nothing left to parse. No word resolved.
 			goto try_again; // We've resolved a comment and still have input, attempt another scan for word
 		}
 		if (want.sym == x) goto break_while;
@@ -186,9 +189,8 @@ I_ void xinterpret() {
 	switch(word.tag) { // lookup table
 	default: break;
 
-	case Word_Null: return; // Do nothing.
-	case Word_U8:   return; // Do nothing we pushed it earlier.
-
+	case Word_Null:           return; // Do nothing.
+	case Word_U8:             return; // Do nothing we pushed it earlier.
 	case Word_bye:   xbye();  return;
 	case Word_dot:   xdot();  return;
 	case Word_dot_s: xdots(); return;
@@ -196,6 +198,7 @@ I_ void xinterpret() {
 	case Word_swap:  xswap(); return;
 	case Word_sub:   xsub();  return;
 	case Word_mult:  xmult(); return;
+	case Word_div:   xdiv();  return;
 	}
 	// Unknown word
 	print_fmt_("<word>?\n", { {ktl_str8_key("word"), serialize_word(word)}, });
