@@ -14,5 +14,10 @@ target:
 debug_info:
 {
   path: "C:/projects/forth/fortish-study/build/simple.pdb"
-  timestamp: 66197984460546
+  timestamp: 66197992976826
+}
+breakpoint:
+{
+  source_location: "code/C/simple.c:204:1"
+  hit_count: 1
 }

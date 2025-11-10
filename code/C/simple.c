@@ -4,6 +4,7 @@ Simple Forth-like: C (ideosyncratic, non-portable), clang, Win32(Windows 11)
 #include "duffle.amd64.win32.h"
 
 typedef Enum_(U8, Word_Tag) {
+	Word_Null,
 	Word_bye,
 	Word_dot,
 	Word_dot_s,
@@ -21,6 +22,7 @@ typedef Enum_(U8, Word_Tag) {
 };
 Str8 str8_word_tag(Word_Tag tag) {
 	LP_ Str8 tbl[] = {
+		str8("__NULL__"),
 		str8("bye"),
 		str8("."),
 		str8(".s"),
@@ -142,16 +144,12 @@ try_again:
 	U8    found     = pmem.buff_cursor;
 	U8    found_len = 0;
 	while (pmem.buff_cursor < S_(pmem.buff)) {
-		U8 x = pmem.buff[pmem.buff_cursor];
-		++ pmem.buff_cursor;
+		U8 x = pmem.buff[pmem.buff_cursor]; ++ pmem.buff_cursor;
 
 		switch(x) {
-		case '(': while(x != ')') { 
-				x = pmem.buff[pmem.buff_cursor];
-				++ pmem.buff_cursor;   
-				switch(x) { case '\r': case '\n': return; } // Nothing left to parse, just exit
-			};
+		case '(': while(x != ')') { x = pmem.buff[pmem.buff_cursor]; pmem.buff_cursor += 1; };
 			++ pmem.buff_cursor;
+			switch(pmem.buff[pmem.buff_cursor]) { case '\r': case '\n': return; } // Nothing left to parse, just exit
 			goto try_again; // We've resolved a comment and still have input, attempt another scan for word
 
 		case '\r': case '\n': goto break_while;
@@ -161,6 +159,7 @@ try_again:
 		++ found_len;
 	}
 break_while:
+	/*No word resolve, return*/ if (found_len == 0) return;
 	U8 hash = hash64_fnv1a_ret((Slice){u8_(pmem.buff) + found, found_len}, 0);
 	for (U8 id = 0; id < Word_DictionaryNum; ++ id)
 		if (hash == pmem.dictionary[id]) {
@@ -185,6 +184,7 @@ I_ void xinterpret() {
 	switch(word.tag) { // lookup table
 	default: break;
 
+	case Word_Null:    return; // Do nothing.
 	case Word_Integer: return; // Do nothing we pushed it earlier.
 
 	case Word_bye:   xbye();  return;
@@ -199,16 +199,14 @@ I_ void xinterpret() {
 	stack_pop();
 }
 I_ void ok(){ while(1) {
-	fstack_reset(thread.scratch);
-	print_("OK ");
+	fstack_reset(thread.scratch); print_("OK ");
 	U4 len, read_ok = ms_read_console(pmem.std_in, pmem.buff, S_(pmem.buff), & len, null);
 	if (read_ok == false || len == 0) { continue; }
 	pmem.buff_cursor = 0;
 	while (pmem.buff_cursor < len) {
 		stack_push_char(' ');
-		xword();
-		xinterpret();
-		while (len > 0 && (pmem.buff[pmem.buff_cursor - 1] == '\n' || pmem.buff[pmem.buff_cursor - 1] == '\r')) { -- len; }
+		xword(); xinterpret();
+		while(len > 0) switch(pmem.buff[pmem.buff_cursor - 1]) { default: len -= 1; break; case'\r': case'\n': len = 0; }
 	}
 }}
 
