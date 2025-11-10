@@ -15,7 +15,7 @@ typedef Enum_(U8, Word_Tag) {
 	Word_DictionaryNum,
 	// Non-dictionary
 	Word_Char,
-	Word_Number,
+	Word_Integer,
 	Word_String,
 	Word_Num,
 };
@@ -39,7 +39,7 @@ Str8 str8_word_tag(Word_Tag tag) {
 typedef Struct_(Word) { Word_Tag tag; union {
 	Str8   str;
 	UTF8   sym;
-	U8     num;
+	U8     num; // TODO(Ed): Support signed integer
 };};
 
 typedef Struct_(Stack) { U8 ptr, len, id; };
@@ -63,6 +63,7 @@ typedef Struct_(ThreadMemory) {
 global     ProcessMemory pmem;
 global LT_ ThreadMemory  thread;
 
+#pragma region Grime
 IA_ Slice scratch_64k()        { return (Slice){u8_(thread.scratch.arr), S_(thread.scratch.arr)}; }
 IA_ Slice scratch_push(U8 len) { return fstack_push_(thread.scratch, len); }
 
@@ -73,22 +74,32 @@ IA_ Str8 str8_from_u4_opt(U4 num, Opt_str8_from_u4 o) { if (o.radix == 0) {o.rad
 }
 #define str8_from_u4(num, ...) str8_from_u4_opt(num, opt_(str8_from_u4, __VA_ARGS__))
 
-#define str8_fmt_(s, tbl_arr)                   str8_fmt(str8(s), ktl_str8_from_arr(tbl_arr))
-#define print_fmt_(s, tbl_arr)            print(str8_fmt(str8(s), ktl_str8_from_arr(tbl_arr)))
+#define str8_fmt_tbl(s,tbl)                     str8_fmt(str8(s), tbl)
+#define print_fmt_tbl(s,tbl)              print(str8_fmt(str8(s), tbl))
 #define print_(s)                         print(str8(s))
 IA_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(64)), tbl, fmt); };
 IA_ void print(Str8 s)                    { U4 written; ms_write_console(pmem.std_out, s.ptr, u4_(s.len), & written, 0); }
 
-IA_ Word*r stack_get_r(U8 id) { return & pmem.stack.arr[id]; };
-IA_ Word   stack_get(U8 id)   { return   pmem.stack.arr[id]; };
-IA_ Word   stack_pop()        { 
-	Word w = pmem.stack.arr[pmem.stack.top]; 
-	if (w.tag == Word_String){ pmem.word_strs.top -= w.str.len; }
-	pmem.stack.arr[pmem.stack.top] = (Word){0}; 
-	pmem.stack.top = clamp_bot(0, s8_(-- pmem.stack.top));
-	return w; 
+typedef Struct_(Defer_print_fmt) { KTL_Str8 tbl; U8 once; };
+#define print_fmt_(fmt, ...) \
+defer_info(Defer_print_fmt, print(str8_fmt(str8(fmt),info.tbl))) { \
+	KTL_Slot_Str8 tbl[] = __VA_ARGS__; \
+	info.tbl = ktl_str8_from_arr(tbl); \
 }
-IA_ Word stack_push(Word w) { return pmem.stack.arr[pmem.stack.top] = w; ++ pmem.stack.top; }
+
+IA_ Word*r stack_get_r(U8 id) { U8 rel = pmem.stack.top - id; return & pmem.stack.arr[clamp_decrement(rel)]; };
+IA_ Word   stack_get  (U8 id) { U8 rel = pmem.stack.top - id; return   pmem.stack.arr[clamp_decrement(rel)]; };
+I_  Word   stack_pop() {
+	U8   last = clamp_decrement(pmem.stack.top);
+	Word w    = pmem.stack.arr[last]; 
+	if (w.tag == Word_String){ pmem.word_strs.top -= w.str.len; }
+	pmem.stack.top = last;
+	if (pmem.stack.top == 0) {
+		pmem.stack.arr[pmem.stack.top] = (Word){0};
+	}
+	return w;
+}
+IA_ void stack_push(Word w) { pmem.stack.arr[pmem.stack.top] = w; ++ pmem.stack.top; }
 
 IA_ void stack_push_char(UTF8 sym) { stack_push((Word){Word_Char,   .sym = sym}); }
 IA_ void stack_push_str8(Str8 str) { 
@@ -98,28 +109,31 @@ IA_ void stack_push_str8(Str8 str) {
 }
 IA_ Str8 serialize_word(Word word){ switch(word.tag) {
 case Word_String: return word.str;
-case Word_Number: return str8_from_u4(u4_(word.num));
+case Word_Integer: return str8_from_u4(u4_(word.num));
 default: return (Str8){};
 }}
-I_ Str8 serialize_stack(){
+I_ Str8 serialize_stack() {
 	Str8Gen serial = { .ptr = C_(UTF8*, scratch_push(kilo(64)).ptr), .cap = kilo(64), };
 	str8gen_append_str8_(& serial, "[ "); 
-	for (U4 id = pmem.stack.top; s4_(pmem.stack.top) >= 0; -- id) {
-		// \t<word>,\n
-		str8gen_append_str8_(& serial, "\t");
-		str8gen_append_str8 (& serial, serialize_word(stack_get(id))); 
-		str8gen_append_str8_(& serial, ",\n");
+	if (pmem.stack.top > 0) {
+		for (U4 id = pmem.stack.top - 1; id > 0; -- id) {
+			// \t<word>,\n
+			str8gen_append_str8 (& serial, serialize_word(stack_get(id))); 
+			str8gen_append_str8_(& serial, ", ");
+		}
+		str8gen_append_str8 (& serial, serialize_word(stack_get(0))); 
 	}
-	str8gen_append_str8_(& serial, " ]");
+	str8gen_append_str8_(& serial, " ]\n");
 	return (Str8){serial.ptr, serial.len};
 }
+#pragma endregion Grime
 
 IA_ void xbye()  { process_exit(0); }
-IA_ void xdot()  { Str8 str = str8_from_u4(u4_(stack_pop().num)); print(str); }
+IA_ void xdot()  { print_fmt_("<num>\n", { {ktl_str8_key("num"), str8_from_u4(u4_(stack_pop().num))}, }); }
 IA_ void xdots() { defer_rewind(thread.scratch.top) { print(serialize_stack()); } }
-IA_ void xadd()  { stack_push((Word){Word_Number, .num = stack_pop().num + stack_pop().num}); }
-IA_ void xswap() { U8 x = stack_get(-1).num; stack_get_r(-1)->num = stack_get(-2).num; stack_get_r(-2)->num = x; }
-IA_ void xsub()  { xswap(); stack_push((Word){Word_Number, .num = stack_pop().num - stack_pop().num}); }
+IA_ void xadd()  { stack_push((Word){Word_Integer, .num = stack_pop().num + stack_pop().num}); }
+IA_ void xswap() {  U8 x = stack_get(0).num; stack_get_r(0)->num = stack_get(1).num;  stack_get_r(1)->num = x; }
+IA_ void xsub()  { xswap(); stack_push((Word){Word_Integer, .num = stack_pop().num - stack_pop().num}); }
 
 I_ void xword() {
 	Word  want      = stack_pop();
@@ -141,14 +155,26 @@ I_ void xword() {
 			stack_push((Word){id, {}});
 			return; // Identified a dictionary word, not a string
 		}
-	stack_push_str8((Str8){C_(UTF8*, pmem.buff + found), found_len});
+	U1*r digit = pmem.buff + found;
+	Str8 str   = str8_comp(pmem.buff + found, found_len);
+	if (char_is_digit(digit[0], 10)) {
+		stack_push((Word){Word_Integer, .num = u8_from_str8(str, 10)});
+		return;
+	}
+	// Unknown string
+	stack_push_str8(str);
 }
 I_ void xinterpret() {
-	Word word = stack_pop();
+	Word word = stack_get(0);
 	if (word.tag > Word_Num) {
 		return;
 	}
-	if (word.tag < Word_DictionaryNum) switch(word.tag) { // lookup table
+	if (word.tag < Word_DictionaryNum) { stack_pop(); }
+	switch(word.tag) { // lookup table
+	default: break;
+
+	case Word_Integer: return; // Do nothing we pushed it earlier.
+
 	case Word_bye:   xbye();  return;
 	case Word_dot:   xdot();  return;
 	case Word_dot_s: xdots(); return;
@@ -156,10 +182,9 @@ I_ void xinterpret() {
 	case Word_swap:  xswap(); return;
 	case Word_sub:   xsub();  return;
 	}
-	else {
-		KTL_Slot_Str8 tbl_arr[] = { {ktl_str8_key("word"), serialize_word(word)}, };
-		print_fmt_("<word>?\n", tbl_arr);
-	}
+	// Unknown word
+	print_fmt_("<word>?\n", { {ktl_str8_key("word"), serialize_word(word)}, });
+	stack_pop();
 }
 I_ void ok(){ while(1) {
 	fstack_reset(thread.scratch);

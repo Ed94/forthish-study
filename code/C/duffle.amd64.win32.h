@@ -1,5 +1,5 @@
 /*
-C-- DSL Duffle
+C DSL Duffle
 ISA:      amd64
 Sandbox:  Windows 11
 Compiler: clang
@@ -214,7 +214,9 @@ IA_ void slice_copy_(Slice dest, Slice src) {
 #pragma region Math
 #define min(A,B)       (((A) < (B)) ? (A) : (B))
 #define max(A,B)       (((A) > (B)) ? (A) : (B))
-#define clamp_bot(X,B) max(X, B)
+#define clamp_bot(X,B) max(X, B) // Clamp "X" by "B"
+
+#define clamp_decrement(X) (((X) > 0) ? ((X) - 1) : 0)
 
 typedef Struct_(R1_U1){ U1 p0; U1 p1; };
 typedef Struct_(R1_U2){ U2 p0; U2 p1; };
@@ -229,9 +231,10 @@ typedef Struct_(V2_U1){ U1 x; U1 y;};
 #define index_iter(type, iter, begin, op, end) (type iter = begin; iter op end; (begin < end ? ++ iter : -- iter))
 #define range_iter(iter,op,range)              (T_((range).p0) iter = (range).p0; iter op (range).p1; ((range).p0 < (range).p1 ? ++ iter : -- iter))
 
-#define defer(expr)          for(U4         once=(1,(begin));once!=0;--once,(expr))
-#define scope(begin,end)     for(U4         once=(1,(begin));once!=0;--once,(end ))
-#define defer_rewind(cursor) for(T_(cursor) sp=cursor,once=1;once!=0;--once,cursor=sp) // Used with arenas/stacks
+#define defer(expr)                for(U4         once= 1;                  once!=1;++     once,(expr))    // Basic do something after body
+#define scope(begin,end)           for(U4         once=(1,(begin));         once!=1;++     once,(end ))    // Do things before or after a scope
+#define defer_rewind(cursor)       for(T_(cursor) sp=cursor,once=0;         once!=1;++     once,cursor=sp) // Used with arenas/stacks
+#define defer_info(type,expr, ...) for(type       info= {__VA_ARGS__}; info.once!=1;++info.once,(expr))    // Defer with tracked state
 #pragma endregion Control Flow & Iteration
 
 #pragma region FArena
@@ -287,7 +290,8 @@ typedef unsigned char UTF8;
 typedef Struct_(Str8) { UTF8* ptr; U8 len; }; 
 typedef Str8 Slice_UTF8;
 typedef Slice_(Str8);
-#define str8(literal) ((Str8){(UTF8*)literal, S_(literal) - 1})
+#define str8_comp(ptr, len) ((Str8){(UTF8*)ptr, len});
+#define str8(literal)       ((Str8){(UTF8*)literal, S_(literal) - 1})
 #pragma endregion Text
 
 #pragma region Hashing
@@ -339,10 +343,10 @@ IA_ void ktl_populate_slice_a2_str8(KTL_Str8* kt, Slice_Str8_A2 values) {
 	}
 }
 #define ktl_str8_key(str)      hash64_fnv1a_ret(slice_to_ut(str8(str)), 0)
-#define ktl_str8_from_arr(arr) (KTL_Str8){arr, array_len(tbl_arr)}
+#define ktl_str8_from_arr(arr) (KTL_Str8){arr, array_len(arr)}
 #pragma endregion KTL
 
-#pragma region Serialization
+#pragma region Text Ops
 // NOTE(rjf): Includes reverses for uppercase and lowercase hex.
 RO_ global U8 integer_symbol_reverse[128] = {
   0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
@@ -355,8 +359,8 @@ RO_ global U8 integer_symbol_reverse[128] = {
   0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
 };
 
-IA_ B4   char_is_upper  (UTF8 c) { return('A' <= c && c <= 'Z'); }
-IA_ UTF8 char_to_lower  (UTF8 c) { if (char_is_upper(c)) { c += ('a' - 'A'); } return(c); }
+IA_ B4   char_is_upper(UTF8 c) { return('A' <= c && c <= 'Z'); }
+IA_ UTF8 char_to_lower(UTF8 c) { if (char_is_upper(c)) { c += ('a' - 'A'); } return(c); }
 IA_ B4   char_is_digit(UTF8 c, U4 base) {
   B4 result = 0; if (0 < base && base <= 16) {
     if (integer_symbol_reverse[c] < base) result = 1;
@@ -364,8 +368,19 @@ IA_ B4   char_is_digit(UTF8 c, U4 base) {
   return result;
 }
 IA_ UTF8 integer_symbols(UTF8 value) {
-	LP_ UTF8 lookup_table[16] = { '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F', }; return lookup_table[C_(UTF8, value)]; 
+	LP_ UTF8 lookup_table[16] = { '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F', }; 
+	return lookup_table[C_(UTF8, value)]; 
 }
+IA_ U8 u8_from_str8(Str8 str, U4 radix) {
+  U8 x = 0; if(1 < radix && radix <= 16) {
+    for each_iter(U8, cursor, str.len) { 
+      x *= radix;
+      x += integer_symbol_reverse[str.ptr[cursor] & 0x7F];
+    }
+  }
+  return x;
+}
+
 typedef Struct_(Info_str8_from_u4) {
 	Str8 prefix;
 	U4   digit_group_size;
@@ -374,7 +389,7 @@ typedef Struct_(Info_str8_from_u4) {
 };
 I_ Info_str8_from_u4 str8_from_u4_info(U4 num, U4 radix, U4 min_digits, U4 digit_group_separator)
 {
-	Info_str8_from_u4 info;
+	Info_str8_from_u4 info = {0};
 	LP_ Str8 tbl_prefix[] = { str8("0x"), str8("0o"), str8("0b") };
 	switch (radix) {
 	case 16: { info.prefix = tbl_prefix[0]; } break;
@@ -420,8 +435,8 @@ I_ Info_str8_from_u4 str8_from_u4_info(U4 num, U4 radix, U4 min_digits, U4 digit
 }
 I_ Str8 str8_from_u4_buf(Slice buf, U4 num, U4 radix, U4 min_digits, U4 digit_group_separator, Info_str8_from_u4 info)
 {
-	Str8 result;
 	assert(buf.len >= info.size_required);
+	Str8 result = { C_(UTF8*, buf.ptr), info.size_required };
 	/*Fill Content*/ {
 		U4 num_reduce             = num;
 		U4 digits_until_separator = info.digit_group_size;
@@ -516,7 +531,7 @@ typedef Struct_(Str8Gen) { UTF8* ptr; U8 cap, len; };
 IA_ Slice str8gen_buf(Str8Gen*r gen) { return (Slice){u8_(gen->ptr) + gen->len, gen->cap - gen->len}; }
 
 IA_ void str8gen_append_str8(Str8Gen*r gen, Str8 str) { assert(gen != nullptr);
-	Str8 mem = farena_push_array(C_(FArena*, gen), UTF8, str.len);
+	Str8 mem = farena_push_array(C_(FArena*, gen), UTF8, str.len, .alignment = 1);
 	slice_copy(mem, str);
 }
 IA_ void str8gen_append_fmt(Str8Gen*r gen, Str8 fmt, KTL_Str8 tbl) {
@@ -524,4 +539,4 @@ IA_ void str8gen_append_fmt(Str8Gen*r gen, Str8 fmt, KTL_Str8 tbl) {
 	gen->len += result.len;
 }
 #define str8gen_append_str8_(gen, s) str8gen_append_str8(gen, str8(s))
-#pragma endregion Serialization
+#pragma endregion Text Ops
