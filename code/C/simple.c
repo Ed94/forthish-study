@@ -18,20 +18,20 @@ typedef Enum_(U8, Word_Tag) {
 	X(add_of,   "+of")       \
 	X(sub_of,   "-of")       \
 	X(mul_of,   "*of")       \
-	X(add_s,    "+s")        \
-	X(sub_s,    "-s")        \
-	X(mul_s,    "*s")        \
-	X(div_s,    "/s")        \
-	X(add_s_of, "+sof")      \
-	X(sub_s_of, "-sof")      \
-	X(mul_s_of, "*sof")      \
+	/*X(add_s,    "+s")*/    \
+	/*X(sub_s,    "-s")*/    \
+	/*X(mul_s,    "*s")*/    \
+	/*X(div_s,    "/s")*/    \
+	/*X(add_s_of, "+sof")*/  \
+	/*X(sub_s_of, "-sof")*/  \
+	/*X(mul_s_of, "*sof")*/  \
 	X(signal,   "signal")    \
 	X(u_of,     "u_of")      \
 	X(s_of,     "s_of")      \
-	X(Cast_U8,  "U8") /*(only serialization)*/ \
-	X(Cast_S8,  "S8") /*(only serialization)*/ \
-	X(Cast_F4,  "F4") /*(only serialization)*/ \
-	X(Cast_F8,  "F8") /*(only serialization)*/ \
+	/*X(Cast_U8,  "U8")*/ /*(only serialization)*/ \
+	/*X(Cast_S8,  "S8")*/ /*(only serialization)*/ \
+	/*X(Cast_F4,  "F4")*/ /*(only serialization)*/ \
+	/*X(Cast_F8,  "F8")*/ /*(only serialization)*/ \
 	X(DictionaryNum,"__Word_DictionaryNum__")  \
 	X(word,"word")           \
 	X(interpret,"interpret") \
@@ -92,10 +92,6 @@ global     ProcessMemory pmem;
 global LT_ ThreadMemory  thread;
 
 #pragma region Grime
-#define set_signal_(flag, value) set_signal(flag, tmpl(flag,pos), value)
-IA_ void set_signal(U8 flag, U8 pos, U8 value) { pmem.signal = (pmem.signal & ~flag) | (value << pos); }
-
-IA_ Slice scratch_64k()        { return (Slice){u8_(thread.scratch.arr), S_(thread.scratch.arr)}; }
 IA_ Slice scratch_push(U8 len) { return fstack_push_(thread.scratch, len); }
 
 typedef Opt_(str8_from_u4) { U4 radix, min_digits, digit_group_separator; }; 
@@ -118,6 +114,9 @@ defer_info(Defer_print_fmt, print(str8_fmt(str8(fmt),info.tbl))) { \
 	info.tbl = ktl_str8_from_arr(tbl); \
 }
 #pragma endregion Grime
+
+#define set_signal_(flag, value) set_signal(flag, tmpl(flag,pos), value)
+IA_ void set_signal(U8 flag, U8 pos, U8 value) { pmem.signal = (pmem.signal & ~flag) | (value << pos); }
 
 IA_ Word*r stack_get_r(U8 id) { U8 rel = pmem.stack.top - id; return & pmem.stack.arr[clamp_decrement(rel)]; };
 IA_ Word   stack_get  (U8 id) { U8 rel = pmem.stack.top - id; return   pmem.stack.arr[clamp_decrement(rel)]; };
