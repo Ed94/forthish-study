@@ -65,8 +65,6 @@ typedef Struct_(Word) { Word_Tag tag; union {
 	F8     f8;
 };};
 
-typedef Struct_(Stack) { U8 ptr, len, id; };
-
 typedef FStack_(StackArena_K128, U1,   kilo(128));
 typedef FStack_(StackArena_M1,   U1,   mega(1));
 typedef FStack_(Stack_Word,      Word, mega(1) / S_(Word));
@@ -202,29 +200,27 @@ try_again:
 		U8 x = pmem.buff[pmem.buff_cursor]; ++ pmem.buff_cursor;
 
 		switch(x) {
-		case '\r': case '\n': goto break_while; // Nothing left to parse, a word should resolve.
+		case '\r': case '\n': goto check_word; // Nothing left to parse, a word should resolve.
 		case '(': while(x != ')') { x = pmem.buff[pmem.buff_cursor]; pmem.buff_cursor += 1; };
 			++ pmem.buff_cursor;
 			switch(pmem.buff[pmem.buff_cursor]) { case '\r': case '\n': return; } // Nothing left to parse. No word resolved.
 			goto try_again; // We've resolved a comment and still have input, attempt another scan for word
 		}
-		if (want.sym == x) goto break_while;
+		if (want.sym == x) goto check_word;
 		++ found_len; // Stil resolving a word (no word end of line or end of word delimiter reached)
 	}
-break_while:
-	/*No word resolve, return*/ if (found_len == 0) return;
+check_word: if (found_len == 0) return; /*If No word resolved, return*/
 	U8 hash = hash64_fnv1a_ret((Slice){u8_(pmem.buff) + found, found_len}, 0);
 	for (U8 id = 0; id < Word_DictionaryNum; ++ id)
 		if (hash == pmem.dictionary[id]) {
-			stack_push((Word){id, {}}); return; // Identified a dictionary word, not a string
+			stack_push((Word){id, {}}); return; /*Identified a dictionary word*/ 
 		}
 	U1*r digit = pmem.buff + found;
 	Str8 str   = str8_comp(pmem.buff + found, found_len);
 	if (char_is_digit(digit[0], 10)) {
 		stack_push((Word){Word_U8, .u8 = u8_from_str8(str, 10)}); return;
 	}
-	// Unknown string
-	stack_push_str8(str);
+	stack_push_str8(str); // Unknown string
 }
 I_ void xinterpret() {
 	Word word = stack_get(0);
