@@ -8,6 +8,7 @@ Standard: c23
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-variable"
 #pragma clang diagnostic ignored "-Wswitch"
+#pragma clang diagnostic ignored "-Wuninitialized"
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "Kernel32.lib")
@@ -57,6 +58,7 @@ Standard: c23
 #define Array_sym(type,len)           type ## _ ## A ## len
 #define Array_expand(type,len)        type Array_sym(type, len)[len];
 #define Array_(type,len)              Array_expand(type,len)
+#define Bit_(id,b)                    id = (1 << b), tmpl(id,pos) = b
 #define Enum_(underlying_type,symbol) enum   symbol: underlying_type symbol; enum symbol: underlying_type
 #define Struct_(symbol)               struct symbol   symbol;                struct symbol
 #define Union_(symbol)                union  symbol   symbol;                union  symbol
@@ -212,6 +214,8 @@ IA_ void slice_copy_(Slice dest, Slice src) {
 #pragma endregion Memory
 
 #pragma region Math
+#define u8_max 0xffffffffffffffffull
+
 #define min(A,B)       (((A) < (B)) ? (A) : (B))
 #define max(A,B)       (((A) > (B)) ? (A) : (B))
 #define clamp_bot(X,B) max(X, B) // Clamp "X" by "B"
@@ -224,6 +228,13 @@ typedef Struct_(R1_U4){ U4 p0; U2 p4; };
 typedef Struct_(R1_U8){ U8 p0; U8 p4; };
 
 typedef Struct_(V2_U1){ U1 x; U1 y;};
+
+IA_ B8 add_of  (U8 a, U8 b, U8*r res) { return __builtin_uaddll_overflow(a, b, res); }
+IA_ B8 sub_of  (U8 a, U8 b, U8*r res) { return __builtin_usubll_overflow(a, b, res); }
+IA_ B8 mul_of  (U8 a, U8 b, U8*r res) { return __builtin_umulll_overflow(a, b, res); }
+IA_ B8 add_s_of(S8 a, S8 b, S8*r res) { return __builtin_saddll_overflow(a, b, res); }
+IA_ B8 sub_s_of(S8 a, S8 b, S8*r res) { return __builtin_ssubll_overflow(a, b, res); }
+IA_ B8 mul_s_of(S8 a, S8 b, S8*r res) { return __builtin_smulll_overflow(a, b, res); }
 #pragma endregion Math
 
 #pragma region Control Flow & Iteration
