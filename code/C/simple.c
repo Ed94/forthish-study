@@ -105,22 +105,22 @@ IA_ Slice scratch_push(U8 len) { return fstack_push_(thread.scratch, len); }
 
 typedef Opt_(str8_from_u4) { U4 radix, min_digits, digit_group_separator; }; 
 IA_ Str8 str8_from_u4_opt(U4 num, Opt_str8_from_u4 o) { if (o.radix == 0) {o.radix = 10;} 
-	Info_str8_from_u4 info = str8_from_u4_info(num, o.radix, o.min_digits, o.digit_group_separator);
-	return str8_from_u4_buf(scratch_push(128), num, o.radix, o.min_digits, o.digit_group_separator, info);
+/*gather info*/Info_str8_from_u4 info = str8_from_u4_info(num, o.radix, o.min_digits, o.digit_group_separator);
+/*write buf  */return str8_from_u4_buf(scratch_push(128), num, o.radix, o.min_digits, o.digit_group_separator, info);
 }
 #define str8_from_u4(num, ...) str8_from_u4_opt(num, opt_(str8_from_u4, __VA_ARGS__))
 
 #define str8_fmt_tbl(s,tbl)                     str8_fmt(str8(s), tbl)
 #define print_fmt_tbl(s,tbl)              print(str8_fmt(str8(s), tbl))
 #define print_(s)                         print(str8(s))
-IA_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(1)), tbl, fmt); };
+IA_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(4)), tbl, fmt); };
 IA_ void print(Str8 s)                    { U4 written; ms_write_console(pmem.std_out, s.ptr, u4_(s.len), & written, 0); }
 
 typedef Struct_(Defer_print_fmt) { KTL_Str8 tbl; U8 once; };
 #define print_fmt_(fmt, ...) \
-defer_info(Defer_print_fmt, print(str8_fmt(str8(fmt),info.tbl))) { \
-	KTL_Slot_Str8 tbl[] = __VA_ARGS__; \
-	info.tbl = ktl_str8_from_arr(tbl); \
+defer_info(Defer_print_fmt, print(str8_fmt(str8(fmt),info.tbl))) {   \
+	KTL_Slot_Str8 tbl[] = __VA_ARGS__; /*aggregate entries to array*/  \
+	info.tbl = ktl_str8_from_arr(tbl); /*reference array as slice  */  \
 }
 #pragma endregion Grime
 
@@ -182,9 +182,9 @@ I_ void serialize_signal() {
 	});
 }
 
-IA_ U8 swap_sub_u8(U8 a, U8 b) { return b - a; }
-IA_ U8 swap_div_u8(U8 a, U8 b) { return b / a; }
-IA_ U8 swap_mod_u8(U8 a, U8 b) { return b % a; }
+IA_ U8 swap_sub_u8(U8 b, U8 a) { return b - a; }
+IA_ U8 swap_div_u8(U8 b, U8 a) { return b / a; }
+IA_ U8 swap_mod_u8(U8 b, U8 a) { return b % a; }
 
 // Exercise Original
 IA_ void xbye()  { process_exit(0); }

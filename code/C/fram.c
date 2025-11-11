@@ -12,11 +12,11 @@ In real terms, a little slower, but offers some exciting benefits, which I'll ex
 */
 #include "duffle.amd64.win32.h"
 
-
 // Just the encoding format for SWord data
 typedef Enum_(U8, SWord_Tag) {
 #define Word_Tag_Entries() \
 	X(Char,"Char")           \
+	X(Code,"Code")           \
 	X(U8,  "U8")             \
 	X(S8,  "S8")             \
 	X(F4,  "F4")             \
@@ -32,12 +32,11 @@ Str8 str8_word_tag(SWord_Tag tag) {
 	#define X(n,s) str8(s),
 		Word_Tag_Entries()
 	#undef X
+	#undef Word_Tag_Entries
 	};
 	return tbl[tag];
 }
-#undef Word_Tag_Entries
 typedef Struct_(SWord) { SWord_Tag tag; union {
-	WordProc* proc;
 	Str8      str;
 	UTF8      sym;
 	U8        u8;
@@ -58,15 +57,18 @@ typedef Struct_(Word) {
 	U1 len, ptr[Word_Str_Cap];
 	U8 code;
 };
-enum { Word_Slot_Empty = u8_max, };
 typedef Struct_(WordEntry) {
 	U8 hash;
 	U8 slot;
 };
+enum { 
+	Bit_(WordSlot_Occupied, 63),
+	WordSlot_Invalid = Word_Cap,
+};
 
-typedef FStack_(StackArena_K16,     U1, kilo(16));
-typedef FStack_(WordRam,          Word, Word_Cap);
-typedef FStack_(WordStack,       SWord, Stack_Cap); 
+typedef FStack_(StackArena_K16,    U1, kilo(16));
+typedef FStack_(WordRam,         Word, Word_Cap);
+typedef FStack_(WordStack,      SWord, Stack_Cap); 
 
 enum Signal {
 	Bit_(Signal_U8_OF, 1),
@@ -103,7 +105,7 @@ IA_ Str8 str8_from_u4_opt(U4 num, Opt_str8_from_u4 o) { if (o.radix == 0) {o.rad
 #define str8_fmt_tbl(s,tbl)                     str8_fmt(str8(s), tbl)
 #define print_fmt_tbl(s,tbl)              print(str8_fmt(str8(s), tbl))
 #define print_(s)                         print(str8(s))
-IA_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(64)), tbl, fmt); };
+IA_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(4)), tbl, fmt); };
 IA_ void print(Str8 s)                    { U4 written; ms_write_console(pmem.std_out, s.ptr, u4_(s.len), & written, 0); }
 
 typedef Struct_(Defer_print_fmt) { KTL_Str8 tbl; U8 once; };
@@ -120,7 +122,7 @@ IA_ void set_signal(U8 flag, U8 pos, U8 value) { pmem.signal = (pmem.signal & ~f
 IA_ SWord*r stack_get_r(U8 id) { U8 rel = pmem.stack.top - id; return & pmem.stack.arr[clamp_decrement(rel)]; };
 IA_ SWord   stack_get  (U8 id) { U8 rel = pmem.stack.top - id; return   pmem.stack.arr[clamp_decrement(rel)]; };
 I_  SWord   stack_pop() {
-	U8   last = clamp_decrement(pmem.stack.top);
+	U8    last = clamp_decrement(pmem.stack.top);
 	SWord w    = pmem.stack.arr[last]; 
 	if (w.tag == SWord_Str8){ pmem.word_strs.top -= w.str.len; }
 	pmem.stack.top = last;
@@ -131,8 +133,9 @@ I_  SWord   stack_pop() {
 }
 IA_ void stack_push(SWord w) { pmem.stack.arr[pmem.stack.top] = w; ++ pmem.stack.top; }
 
-IA_ void stack_push_char(UTF8 sym) { stack_push((SWord){SWord_Char, .sym = sym}); }
-IA_ void stack_push_u8  (U8   n)   { stack_push((SWord){SWord_U8,   .u8  = n}); }
+IA_ void stack_push_char(UTF8 sym)  { stack_push((SWord){SWord_Char, .sym = sym }); }
+IA_ void stack_push_u8  (U8   n)    { stack_push((SWord){SWord_U8,   .u8  = n   }); }
+IA_ void stack_push_code(U8   slot) { stack_push((SWord){SWord_Code, .u8  = slot}); }
 IA_ void stack_push_str8(Str8 str) { 
 	Str8 stored = fstack_push_array(pmem.word_strs, UTF8, str.len);
 	slice_copy(stored, str);
@@ -194,39 +197,35 @@ I_ void serialize_signal() {
 	});
 }
 
-IA_ U8 dict_index(U8 hash) { return C_(U8, hash & (Word_Cap - 1)); }
-
+IA_ U8 dict_index(U8 hash) {
+	U8 start = hash % Dict_Cap;
+	U8 id    = start;
+	while (pmem.dict[id].slot & WordSlot_Occupied) 
+	{
+		if (pmem.dict[id].hash == hash) {
+			return id;
+		}
+		id = (id + 1) % Dict_Cap;
+		if (id == start) return Dict_Cap; // Table Full
+	}
+	return id;
+}
 I_ B8 dict_insert(U8 key, U8 slot) 
 {
-	assert(pmem.ram.top <= Word_Cap);
-	U8 start = dict_index(key);
-	U8 id    = slot;
-	do_while(id != start) 
-	{
-		WordEntry* entry = pmem.dict + id;
-		if (entry->slot == Word_Slot_Empty) {
-			entry->hash = key;
-			entry->slot = slot;
-			return true;
-		}
-		if (entry->hash == key) {
-			return false; // Duplicate
-		}
-		id = (id + 1) % Dict_Cap;
-	}
-	print_("Table full!\n");
-	return false;
+	U8 id = dict_index(key);
+	if (id >= Dict_Cap) return false;
+	pmem.dict[id].hash = key;
+	pmem.dict[id].slot = slot | WordSlot_Occupied;
+	return true;
 }
 I_ U8 dict_find(U8 key) {
-	U8 start = dict_index(key);
-	U8 id    = start;
-	do_while(id != start) {
-		WordEntry* entry = pmem.dict + id;
-		if (entry->slot == Word_Slot_Empty) {return Word_Slot_Empty; }
-		if (entry->hash == key)             {return entry->slot;     }
-		id = (id + 1) % Dict_Cap;
+	U8 id    = dict_index(key);
+	WordEntry* entry = pmem.dict + id;
+	U8  found = id < Dict_Cap &&  (entry->slot & WordSlot_Occupied) && entry->hash == key;
+	if (found) {
+		return entry->slot & ~WordSlot_Occupied;
 	}
-	return Word_Slot_Empty;
+	return WordSlot_Invalid;
 }
 
 #define code_(name, proc) code(str8(name), u8_(& proc))
@@ -234,10 +233,10 @@ I_ void code(Str8 name, U8 code) {
 	if (pmem.ram.top >= Word_Cap    ) { print_("Ram full!\n");      return; }
 	if (name.len     >  Word_Str_Cap) { print_("Name too long!\n"); return; }
 	// Fill out ram entry
-	U8 slot = u8_(pmem.ram.top) * 128;
+	U8 slot = u8_(pmem.ram.arr) + pmem.ram.top * 128;
 	u1_r(    slot + O_(Word,len ))[0] = name.len; 
 	u8_r(    slot + O_(Word,code))[0] = code;
-	mem_copy(slot + O_(Word,ptr),   u8_(name.ptr), name.len);
+	mem_copy(slot + O_(Word,ptr), u8_(name.ptr), name.len);
 	// Insert into dictonary
 	U8 hash = hash64_fnv1a_ret(slice_to_ut(name), 0);
 	dict_insert(hash, pmem.ram.top);
@@ -249,9 +248,9 @@ I_ void xtick() {
 	U8    x    = pmem.stack.top;
 	U8    key  = hash64_fnv1a_ret(slice_to_ut(name.str), 0);
 	U8    slot = dict_find(key);
-	if (slot != Word_Slot_Empty) {
+	if (slot != WordSlot_Invalid) {
 		stack_pop();
-		stack_push_u8(slot);
+		stack_push_code(slot);
 		return;
 	}
 }
@@ -265,9 +264,9 @@ I_ void xexecute() {
 	C_(WordProc*,slot->code)();
 }
 
-IA_ U8 swap_sub_u8(U8 a, U8 b) { return b - a; }
-IA_ U8 swap_div_u8(U8 a, U8 b) { return b / a; }
-IA_ U8 swap_mod_u8(U8 a, U8 b) { return b % a; }
+IA_ U8 swap_sub_u8(U8 b, U8 a) { return b - a; }
+IA_ U8 swap_div_u8(U8 b, U8 a) { return b / a; }
+IA_ U8 swap_mod_u8(U8 b, U8 a) { return b % a; }
 
 // Exercise Original
 IA_ void xbye()  { process_exit(0); }
@@ -322,7 +321,8 @@ I_ void xinterpret() {
 	xtick();
 	word = stack_get(0);
 	switch(word.tag) {
-	case SWord_U8: xexecute();
+	case SWord_U8:               return; // Do nothing its handled by xword.
+	case SWord_Code: xexecute(); return; // Were going to execute a code word.
 	}
 	stack_pop();
 	// Unknown word
@@ -330,11 +330,12 @@ I_ void xinterpret() {
 	stack_pop();
 }
 I_ void ok(){ while(1) {
-	fstack_reset(thread.scratch); print_("OK ");
+	print_("OK ");
 	U4 len, read_ok = ms_read_console(pmem.std_in, pmem.buff, S_(pmem.buff), & len, null);
 	if (read_ok == false || len == 0) { continue; }
 	pmem.buff_cursor = 0;
 	while (pmem.buff_cursor < len) {
+		fstack_reset(thread.scratch);
 		stack_push_char(' ');
 		xword();
 		xinterpret();
