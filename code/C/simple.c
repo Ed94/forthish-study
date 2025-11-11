@@ -1,8 +1,20 @@
 /*
-Simple Forth-like: C (ideosyncratic, non-portable), clang, Win32(Windows 11)
+simple: Forth-like in C (ideosyncratic, non-portable), clang, Win32(Windows 11)
+
+The simplest thing that could be called a Forth (Mr. Moore will probably disagree with me). However, it provides a useful parser, stack and interface to the host system. Words in this implementation:
+
+* **+** ( a b -- sum) Add two numbers on top of stack.
+* **-** ( a b -- difference) Subtracts top number from next on stack.
+* **.** ( n --) Pop top of stack and print it.
+* **.s** ( --) Print contents of stack (nondestructive).
+* **bye** ( --) Exit interpreter.
+* **interpret** ( string --) Execute word on top of stack.
+* **swap** ( a b -- b a) Swaps top two items on stack.
+* **word** ( c -- string) Collect characters in input stream up to character c.
 */
 #include "duffle.amd64.win32.h"
 
+// Fixed command list (not able to define more)
 typedef Enum_(U8, Word_Tag) {
 #define Word_Tag_Entries() \
 	X(Null,"__NULL__")       \
@@ -65,26 +77,25 @@ typedef Struct_(Word) { Word_Tag tag; union {
 	F8     f8;
 };};
 
-typedef FStack_(StackArena_K128, U1,   kilo(128));
-typedef FStack_(StackArena_M1,   U1,   mega(1));
-typedef FStack_(Stack_Word,      Word, mega(1) / S_(Word));
+typedef FStack_(StackArena_K64,  U1,   kilo(64));
+typedef FStack_(Stack_Word,      Word, kilo(64) / S_(Word));
 
 enum Signal {
 	Bit_(Signal_U8_OF, 1),
 	Bit_(Signal_S8_OF, 2),
 };
 typedef Struct_(ProcessMemory) {
-	StackArena_M1 word_strs;
-	Stack_Word    stack;
-	U8            dictionary[Word_DictionaryNum];
-	U1            buff[kilo(1)];
-	U8            buff_cursor;
-	B8            signal;
-	MS_Handle     std_out;
-	MS_Handle     std_in;
+	StackArena_K64 word_strs;
+	Stack_Word     stack;
+	U8             dictionary[Word_DictionaryNum];
+	U1             buff[kilo(1)];
+	U8             buff_cursor;
+	B8             signal;
+	MS_Handle      std_out;
+	MS_Handle      std_in;
 };
 typedef Struct_(ThreadMemory) {
-	StackArena_K128 scratch;
+	StackArena_K64 scratch;
 };
 global     ProcessMemory pmem;
 global LT_ ThreadMemory  thread;
@@ -102,7 +113,7 @@ IA_ Str8 str8_from_u4_opt(U4 num, Opt_str8_from_u4 o) { if (o.radix == 0) {o.rad
 #define str8_fmt_tbl(s,tbl)                     str8_fmt(str8(s), tbl)
 #define print_fmt_tbl(s,tbl)              print(str8_fmt(str8(s), tbl))
 #define print_(s)                         print(str8(s))
-IA_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(64)), tbl, fmt); };
+IA_ Str8 str8_fmt(Str8 fmt, KTL_Str8 tbl) { return str8_fmt_ktl_buf(scratch_push(kilo(1)), tbl, fmt); };
 IA_ void print(Str8 s)                    { U4 written; ms_write_console(pmem.std_out, s.ptr, u4_(s.len), & written, 0); }
 
 typedef Struct_(Defer_print_fmt) { KTL_Str8 tbl; U8 once; };
@@ -113,7 +124,7 @@ defer_info(Defer_print_fmt, print(str8_fmt(str8(fmt),info.tbl))) { \
 }
 #pragma endregion Grime
 
-#define set_signal_(flag, value) set_signal(flag, tmpl(flag,pos), value)
+#define  set_signal_(flag, value) set_signal(flag, tmpl(flag,pos), value)
 IA_ void set_signal(U8 flag, U8 pos, U8 value) { pmem.signal = (pmem.signal & ~flag) | (value << pos); }
 
 IA_ Word*r stack_get_r(U8 id) { U8 rel = pmem.stack.top - id; return & pmem.stack.arr[clamp_decrement(rel)]; };
@@ -131,7 +142,7 @@ I_  Word   stack_pop() {
 IA_ void stack_push(Word w) { pmem.stack.arr[pmem.stack.top] = w; ++ pmem.stack.top; }
 
 IA_ void stack_push_char(UTF8 sym) { stack_push((Word){Word_Char, .sym = sym}); }
-IA_ void stack_push_u8  (U8 n)     { stack_push((Word){Word_U8,   .u8  = n}); }
+IA_ void stack_push_u8  (U8   n)   { stack_push((Word){Word_U8,   .u8  = n}); }
 IA_ void stack_push_str8(Str8 str) { 
 	Str8 stored = fstack_push_array(pmem.word_strs, UTF8, str.len);
 	slice_copy(stored, str);
@@ -147,7 +158,7 @@ case Word_U8:   return str8_from_u4(u4_(word.u8));
 default: return (Str8){};
 }}
 I_ Str8 serialize_stack() {
-	Str8Gen serial = { .ptr = C_(UTF8*, scratch_push(kilo(64)).ptr), .cap = kilo(64), };
+	Str8Gen serial = { .ptr = C_(UTF8*, scratch_push(kilo(32)).ptr), .cap = kilo(32), };
 	str8gen_append_str8_(& serial, "[ "); 
 	if (pmem.stack.top > 0) {
 		for (U4 id = pmem.stack.top - 1; id > 0; -- id) {
@@ -171,21 +182,25 @@ I_ void serialize_signal() {
 	});
 }
 
+IA_ U8 swap_sub_u8(U8 a, U8 b) { return b - a; }
+IA_ U8 swap_div_u8(U8 a, U8 b) { return b / a; }
+IA_ U8 swap_mod_u8(U8 a, U8 b) { return b % a; }
+
 // Exercise Original
 IA_ void xbye()  { process_exit(0); }
 IA_ void xdot()  { print_fmt_("<num>\n", { {ktl_str8_key("num"), serialize_word(stack_pop())}, }); }
 IA_ void xdots() { defer_rewind(thread.scratch.top) { print(serialize_stack()); } }
 IA_ void xswap() { U8 x = stack_get(0).u8; stack_get_r(0)->u8 = stack_get(1).u8; stack_get_r(1)->u8 = x; }
-IA_ void xadd()  {          stack_push_u8(stack_pop().u8 + stack_pop().u8); }
-IA_ void xsub()  { xswap(); stack_push_u8(stack_pop().u8 - stack_pop().u8); }
+IA_ void xadd()  { stack_push_u8(stack_pop().u8 + stack_pop().u8); }
+IA_ void xsub()  { U8 res = swap_sub_u8(stack_pop().u8,  stack_pop().u8); stack_push_u8(res); }
 // Challenge additions
-IA_ void xmul()  {          stack_push_u8(stack_pop().u8 * stack_pop().u8); }
-IA_ void xdiv()  { xswap(); stack_push_u8(stack_pop().u8 / stack_pop().u8); }
-IA_ void xmod()  { xswap(); stack_push_u8(stack_pop().u8 % stack_pop().u8); }
+IA_ void xmul()  { stack_push_u8(stack_pop().u8 * stack_pop().u8);  }
+IA_ void xdiv()  { U8 res = swap_div_u8(stack_pop().u8,  stack_pop().u8); stack_push_u8(res); }
+IA_ void xmod()  { U8 res = swap_mod_u8(stack_pop().u8,  stack_pop().u8); stack_push_u8(res); }
 // Bonus
-IA_ void xadd_of() { U8 res={0}; U8 of = add_of(stack_pop().u8, stack_pop().u8, & res); stack_push_u8(res); set_signal_(Signal_U8_OF, of); }
-IA_ void xsub_of() { U8 res={0}; U8 of = sub_of(stack_pop().u8, stack_pop().u8, & res); stack_push_u8(res); set_signal_(Signal_U8_OF, of); }
-IA_ void xmul_of() { U8 res={0}; U8 of = mul_of(stack_pop().u8, stack_pop().u8, & res); stack_push_u8(res); set_signal_(Signal_U8_OF, of); }
+IA_ void xadd_of() { U8 res, of = add_of(stack_pop().u8, stack_pop().u8, & res); stack_push_u8(res); set_signal_(Signal_U8_OF, of); }
+IA_ void xsub_of() { U8 res, of = sub_of(stack_pop().u8, stack_pop().u8, & res); stack_push_u8(res); set_signal_(Signal_U8_OF, of); }
+IA_ void xmul_of() { U8 res, of = mul_of(stack_pop().u8, stack_pop().u8, & res); stack_push_u8(res); set_signal_(Signal_U8_OF, of); }
 IA_ void xu_of()   { stack_push_u8((pmem.signal & Signal_U8_OF) != 0); }
 IA_ void xs_of()   { stack_push_u8((pmem.signal & Signal_S8_OF) != 0); }
 IA_ void xsignal() { serialize_signal(); }
@@ -198,7 +213,6 @@ try_again:
 	U8    found_len = 0;
 	while (pmem.buff_cursor < S_(pmem.buff)) {
 		U8 x = pmem.buff[pmem.buff_cursor]; ++ pmem.buff_cursor;
-
 		switch(x) {
 		case '\r': case '\n': goto check_word; // Nothing left to parse, a word should resolve.
 		case '(': while(x != ')') { x = pmem.buff[pmem.buff_cursor]; pmem.buff_cursor += 1; };
@@ -210,7 +224,7 @@ try_again:
 		++ found_len; // Stil resolving a word (no word end of line or end of word delimiter reached)
 	}
 check_word: if (found_len == 0) return; /*If No word resolved, return*/
-	U8 hash = hash64_fnv1a_ret((Slice){u8_(pmem.buff) + found, found_len}, 0);
+	U8 hash = hash64_fnv1a_ret(slice_ut(u8_(pmem.buff) + found, found_len), 0);
 	for (U8 id = 0; id < Word_DictionaryNum; ++ id)
 		if (hash == pmem.dictionary[id]) {
 			stack_push((Word){id, {}}); return; /*Identified a dictionary word*/ 
@@ -218,7 +232,7 @@ check_word: if (found_len == 0) return; /*If No word resolved, return*/
 	U1*r digit = pmem.buff + found;
 	Str8 str   = str8_comp(pmem.buff + found, found_len);
 	if (char_is_digit(digit[0], 10)) {
-		stack_push((Word){Word_U8, .u8 = u8_from_str8(str, 10)}); return;
+		stack_push_u8(u8_from_str8(str, 10)); return;
 	}
 	stack_push_str8(str); // Unknown string
 }

@@ -120,6 +120,30 @@ typedef float F4_2 __attribute__((vector_size(16)));
 #define sop_4(op,a,b) C_(U4, s4_(a) op s4_(b))
 #define sop_8(op,a,b) C_(U8, s8_(a) op s8_(b))
 
+// #define def_unsigned_op(id,op,width) IA_ U ## width id ## _s ## width(U ## width a, U ## width b) {return a op b; }
+// #define def_unsigned_ops(id,op)      def_unsigned_op(id, op, 1) def_unsigned_op(id, op, 2) def_unsigned_op(id, op, 4) def_unsigned_op(id, op, 8)
+// def_unsigned_ops(add, +)
+// def_unsigned_ops(sub, -)
+// def_unsigned_ops(mut, *)
+// def_unsigned_ops(div, /)
+// def_unsigned_ops(gt,  >)
+// def_unsigned_ops(lt,  <) 
+// def_unsigned_ops(ge, >=)
+// def_unsigned_ops(le, <=)
+// #undef def_unsigned_ops
+// #undef def_unsigned_op
+
+// #define def_generic_op(op, a, ...) _Generic((a), U1:  op ## _u1, U2: op ## _u2, U4: op ## _u4, U8: op ## _u8) (a, __VA_ARGS__)
+// #define add(a,b) def_generic_op(add,a,b)
+// #define sub(a,b) def_generic_op(sub,a,b)
+// #define mut(a,b) def_generic_op(mut,a,b)
+// #define gt(a,b)  def_generic_op(gt, a,b)
+// #define lt(a,b)  def_generic_op(lt, a,b)
+// #define ge(a,b)  def_generic_op(ge, a,b)
+// #define le(a,b)  def_generic_op(le, a,b)
+// #undef def_generic_op
+
+#undef def_signed_op
 #define def_signed_op(id,op,width) IA_ U ## width id ## _s ## width(U ## width a, U ## width b) {return sop_ ## width(op, a, b); }
 #define def_signed_ops(id,op)      def_signed_op(id, op, 1) def_signed_op(id, op, 2) def_signed_op(id, op, 4) def_signed_op(id, op, 8)
 def_signed_ops(add, +)
@@ -130,6 +154,8 @@ def_signed_ops(gt,  >)
 def_signed_ops(lt,  <) 
 def_signed_ops(ge, >=)
 def_signed_ops(le, <=)
+#undef def_signed_ops
+#undef def_signed_op
 
 #define def_generic_sop(op, a, ...) _Generic((a), U1:  op ## _s1, U2: op ## _s2, U4: op ## _s4, U8: op ## _s8) (a, __VA_ARGS__)
 #define add_s(a,b) def_generic_sop(add,a,b)
@@ -139,6 +165,7 @@ def_signed_ops(le, <=)
 #define lt_s(a,b)  def_generic_sop(lt, a,b)
 #define ge_s(a,b)  def_generic_sop(ge, a,b)
 #define le_s(a,b)  def_generic_sop(le, a,b)
+#undef def_generic_sop
 #pragma endregion DSL
 
 #pragma region Thread Coherence
@@ -246,6 +273,8 @@ IA_ B8 mul_s_of(S8 a, S8 b, S8*r res) { return __builtin_smulll_overflow(a, b, r
 #define scope(begin,end)           for(U4         once=(1,(begin));         once!=1;++     once,(end ))    // Do things before or after a scope
 #define defer_rewind(cursor)       for(T_(cursor) sp=cursor,once=0;         once!=1;++     once,cursor=sp) // Used with arenas/stacks
 #define defer_info(type,expr, ...) for(type       info= {__VA_ARGS__}; info.once!=1;++info.once,(expr))    // Defer with tracked state
+
+#define do_while(cond) for (U8 once=0; once!=1 || (cond); ++once)
 #pragma endregion Control Flow & Iteration
 
 #pragma region FArena
@@ -262,7 +291,7 @@ I_ Slice farena_push(FArena*r arena, U8 amount, Opt_farena o) {
 	U8 desired   = amount * (o.type_width == 0 ? 1 : o.type_width);
 	U8 to_commit = align_pow2(desired, o.alignment ?  o.alignment : MEM_ALIGNMENT_DEFAULT);
 	U8 unused    = arena->capacity - arena->used; assert(to_commit <= unused);
-	U8 ptr       = arena->start + arena->used;
+	U8 ptr       = arena->start    + arena->used;
 	arena->used += to_commit;
 	return (Slice){ptr, desired};
 }
@@ -301,7 +330,7 @@ typedef unsigned char UTF8;
 typedef Struct_(Str8) { UTF8* ptr; U8 len; }; 
 typedef Str8 Slice_UTF8;
 typedef Slice_(Str8);
-#define str8_comp(ptr, len) ((Str8){(UTF8*)ptr, len});
+#define str8_comp(ptr, len) ((Str8){(UTF8*)ptr, len})
 #define str8(literal)       ((Str8){(UTF8*)literal, S_(literal) - 1})
 #pragma endregion Text
 
