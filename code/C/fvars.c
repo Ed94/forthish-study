@@ -1,14 +1,15 @@
 /*
-fram: Forth-like in C (ideosyncratic, non-portable), clang, Win32(Windows 11)
+fvars: Forth-like in C (ideosyncratic, non-portable), clang, Win32(Windows 11)
 
-This implements a semi-traditional Forth dictionary in the RAM array. Words are stored with a name field, link field and code field. Instead of finding things directly with a Python dictionary, the `'` word searches for the xt, or "execution token", to be executed.
+Now we're getting into memory manipulations with variables and such. This introduces some new stuff in the code field -- a constant or variable is just like any other Forth word, except the code retrieves the values (or address of the values, for variables).
 
-In real terms, a little slower, but offers some exciting benefits, which I'll explore later.
-
-* **'** ( name -- xt) Finds word's xt in dictionary.
-* **execute** ( xt --) Executes the code at xt.
-* **negate** ( n -- -n) Makes number negative (or positive, if you use it twice).
-* **words** ( --) Prints list of all words in dictionary.
+* **!** ( v a --) Store value at address a.
+* **,** ( v --) Store v as next value in dictionary.
+* **@** ( a -- v) Fetch value from address a.
+* **constant** ( name | v --) Create constant with value v.
+* **create** ( name | --) Create word name in dictionary.
+* **dump** ( start n --) Dump n values starting from RAM address a.
+* **variable** ( name | v --) Create variable name, with initial value v.
 */
 #include "duffle.amd64.win32.h"
 
