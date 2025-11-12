@@ -199,11 +199,8 @@ I_ void serialize_signal() {
 IA_ U8 dict_index(U8 hash) {
 	U8 start = hash % Dict_Cap;
 	U8 id    = start;
-	while (pmem.dict[id].slot & WordSlot_Occupied) 
-	{
-		if (pmem.dict[id].hash == hash) {
-			return id;
-		}
+	while (pmem.dict[id].slot & WordSlot_Occupied) {
+		if (pmem.dict[id].hash == hash) { return id; }
 		id = (id + 1) % Dict_Cap;
 		if (id == start) return Dict_Cap; // Table Full
 	}
@@ -220,9 +217,7 @@ I_ U8 dict_find(U8 key) {
 	U8 id    = dict_index(key);
 	WordEntry* entry = pmem.dict + id;
 	U8  found = id < Dict_Cap &&  (entry->slot & WordSlot_Occupied) && entry->hash == key;
-	if (found) {
-		return entry->slot & ~WordSlot_Occupied;
-	}
+	if (found) { return entry->slot & ~WordSlot_Occupied; }
 	return WordSlot_Invalid;
 }
 
@@ -247,20 +242,11 @@ I_ void xtick() {
 	U8    key  = hash64_fnv1a_ret(slice_to_ut(name.str), 0);
 	U8    slot = dict_find(key);
 	if (slot != WordSlot_Invalid) {
-		stack_pop();
-		stack_push_code(slot);
-		return;
+		stack_pop(); stack_push_code(slot); return;
 	}
 }
-IA_ void xwords() {
-	defer_rewind(thread.scratch.top) {
-		print(serialize_dict());
-	}
-}
-I_ void xexecute() {
-	Word* slot = pmem.ram.arr + stack_pop().u8;
-	C_(WordProc*,slot->code)();
-}
+IA_ void xwords()   { defer_rewind(thread.scratch.top) { print(serialize_dict()); } }
+IA_ void xexecute() { Word* slot = pmem.ram.arr + stack_pop().u8; C_(WordProc*,slot->code)(); }
 
 IA_ U8 swap_sub_u8(U8 b, U8 a) { return b - a; }
 IA_ U8 swap_div_u8(U8 b, U8 a) { return b / a; }

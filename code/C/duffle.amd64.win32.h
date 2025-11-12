@@ -120,29 +120,6 @@ typedef float F4_2 __attribute__((vector_size(16)));
 #define sop_4(op,a,b) C_(U4, s4_(a) op s4_(b))
 #define sop_8(op,a,b) C_(U8, s8_(a) op s8_(b))
 
-// #define def_unsigned_op(id,op,width) IA_ U ## width id ## _s ## width(U ## width a, U ## width b) {return a op b; }
-// #define def_unsigned_ops(id,op)      def_unsigned_op(id, op, 1) def_unsigned_op(id, op, 2) def_unsigned_op(id, op, 4) def_unsigned_op(id, op, 8)
-// def_unsigned_ops(add, +)
-// def_unsigned_ops(sub, -)
-// def_unsigned_ops(mut, *)
-// def_unsigned_ops(div, /)
-// def_unsigned_ops(gt,  >)
-// def_unsigned_ops(lt,  <) 
-// def_unsigned_ops(ge, >=)
-// def_unsigned_ops(le, <=)
-// #undef def_unsigned_ops
-// #undef def_unsigned_op
-
-// #define def_generic_op(op, a, ...) _Generic((a), U1:  op ## _u1, U2: op ## _u2, U4: op ## _u4, U8: op ## _u8) (a, __VA_ARGS__)
-// #define add(a,b) def_generic_op(add,a,b)
-// #define sub(a,b) def_generic_op(sub,a,b)
-// #define mut(a,b) def_generic_op(mut,a,b)
-// #define gt(a,b)  def_generic_op(gt, a,b)
-// #define lt(a,b)  def_generic_op(lt, a,b)
-// #define ge(a,b)  def_generic_op(ge, a,b)
-// #define le(a,b)  def_generic_op(le, a,b)
-// #undef def_generic_op
-
 #undef def_signed_op
 #define def_signed_op(id,op,width) IA_ U ## width id ## _s ## width(U ## width a, U ## width b) {return sop_ ## width(op, a, b); }
 #define def_signed_ops(id,op)      def_signed_op(id, op, 1) def_signed_op(id, op, 2) def_signed_op(id, op, 4) def_signed_op(id, op, 8)
@@ -508,24 +485,15 @@ I_ Str8 str8_fmt_ktl_buf(Slice buffer, KTL_Str8 table, Str8 fmt_template)
 	slice_assert(fmt_template);
 	UTF8*r cursor_buffer    = C_(UTF8*r, buffer.ptr);
 	U8     buffer_remaining = buffer.len;
-
-	UTF8*r cursor_fmt = fmt_template.ptr;
-	U8     left_fmt   = fmt_template.len;
+	UTF8*r cursor_fmt       = fmt_template.ptr;
+	U8     left_fmt         = fmt_template.len;
 	while (left_fmt && buffer_remaining)
 	{
 		// Forward until we hit the delimiter '<' or the template's contents are exhausted.
 		U8 copy_offset = 0;
-		while (cursor_fmt[copy_offset] != '<' && (cursor_fmt + copy_offset) < slice_end(fmt_template)) {
-			++ copy_offset;
-		}
-		mem_copy(u8_(cursor_buffer), u8_(cursor_fmt), copy_offset);
-		buffer_remaining -= copy_offset;
-		left_fmt         -= copy_offset;
-		cursor_buffer    += copy_offset;
-		cursor_fmt       += copy_offset;
 		if (cursor_fmt[0] == '<')
 		{
-			UTF8*r potential_token_cursor = cursor_fmt + 1;
+			UTF8*r potential_token_cursor = cursor_fmt + 1; // Skip '<'
 			U8     potential_token_len    = 0;
 			B4     fmt_overflow           = false;
 			while(true) {
@@ -535,11 +503,15 @@ I_ Str8 str8_fmt_ktl_buf(Slice buffer, KTL_Str8 table, Str8 fmt_template)
 				if (fmt_overflow || found_terminator) { break; }
 				++ potential_token_len;
 			}
-			if (fmt_overflow) continue;
+			if (fmt_overflow) { 
+				// Failed to find a subst and we're at end of fmt, just copy segment.
+				copy_offset = 1 + potential_token_len; // '<' + token
+				goto write_to_buffer; 
+			}
 			// Hashing the potential token and cross checking it with our token table
 			U8 key = hash64_fnv1a_ret(slice_ut(u8_(potential_token_cursor), potential_token_len), 0);
 			Str8*r value = nullptr; for slice_iter(table, token) {
-				// We do a linear iteration instead of a hash table lookup because the user should be never substiuting with more than 100 unqiue tokens..
+				// We do a linear iteration instead of a hash table lookup because the user should never subst with more than 100 unqiue tokens..
 				if (token->key == key) { value = & token->value; break; }
 			}
 			if (value)
@@ -547,22 +519,31 @@ I_ Str8 str8_fmt_ktl_buf(Slice buffer, KTL_Str8 table, Str8 fmt_template)
 				// We're going to appending the string, make sure we have enough space in our buffer.
 				// NOTE(Ed): this version doesn't support growing the buffer (No Allocator Interface)
 				assert((buffer_remaining - potential_token_len) > 0);
-				mem_copy(u8_(cursor_buffer), u8_(value->ptr), value->len);
+				copy_offset = min(buffer_remaining, value->len); // Prevent Buffer overflow.
+				mem_copy(u8_(cursor_buffer), u8_(value->ptr), buffer_remaining);
 				// Sync cursor format to after the processed token
-				cursor_buffer    += value->len;
-				buffer_remaining -= value->len;
-				cursor_fmt        = potential_token_cursor + potential_token_len + 1;
-				left_fmt         -= potential_token_len + 2; // The 2 here are the '<' & '>' delimiters being omitted.
+				cursor_buffer    += copy_offset;
+				buffer_remaining -= copy_offset;
+				cursor_fmt        = potential_token_cursor + 1 + potential_token_len; // '<' + token
+				left_fmt         -= potential_token_len    + 2; // The 2 here are the '<' & '>' delimiters being omitted.
 				continue;
 			}
-			// If not a subsitution, we do a single copy for the '<' and continue.
-			cursor_buffer[0] = cursor_fmt[0];
-			++ cursor_buffer;
-			++ cursor_fmt;
-			-- buffer_remaining;
-			-- left_fmt;
-			continue;
+			// If not a subsitution, we copy the segment and continue.
+			copy_offset = 1 + potential_token_len; // '<' + token
+			goto write_to_buffer;
 		}
+		else do {
+			++ copy_offset;
+		} 
+		while ( (cursor_fmt[copy_offset] != '<' && (cursor_fmt + copy_offset) < slice_end(fmt_template)) );
+	write_to_buffer:
+		assert((buffer_remaining - copy_offset) > 0);
+		copy_offset = min(buffer_remaining, copy_offset); // Prevent buffer overflow.
+		mem_copy(u8_(cursor_buffer), u8_(cursor_fmt), copy_offset);
+		buffer_remaining -= copy_offset;
+		left_fmt         -= copy_offset;
+		cursor_buffer    += copy_offset;
+		cursor_fmt       += copy_offset;
 	}
 	return (Str8){C_(UTF8*, buffer.ptr), buffer.len - buffer_remaining};
 }
